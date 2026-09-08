@@ -1,16 +1,11 @@
 {
+    "id": "gravastar-v60-pro",
+    "name": "Gravastar V60 Pro",
+    "author": "sorakey",
     "config_version": "2",
-    "id": "gravastar-v60-pro-by-saint",
-    "name": "Gravastar V60 Pro - By Saint",
-    "author": "Saint",
-    "description": "I love the sound of the gravastars keyboards",
+    "created_at": "2026-09-08T06:23:05.817804+00:00",
     "definition_method": "single",
-    "audio_file": "audio.mp3",
-    "soundpack_type": "Keyboard",
-    "options": {
-        "recommended_volume": 1,
-        "random_pitch": false
-    },
+    "audio_file": "GRAVASTAR_KEY.mp3",
     "definitions": {
         "KeyW": {
             "timing": [
