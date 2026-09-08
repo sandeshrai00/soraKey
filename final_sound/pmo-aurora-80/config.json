@@ -1,16 +1,11 @@
 {
+    "id": "pmo-aurora-80",
+    "name": "PMO Aurora 80",
+    "author": "sorakey",
     "config_version": "2",
-    "id": "pmo-aurora-80-by-saint",
-    "name": "PMO Aurora 80 - by saint!",
-    "author": "Saint!",
-    "description": "updated the orginal.",
+    "created_at": "2026-09-08T06:24:51.137200+00:00",
     "definition_method": "single",
-    "audio_file": "audio.mp3",
-    "soundpack_type": "Keyboard",
-    "options": {
-        "recommended_volume": 1,
-        "random_pitch": false
-    },
+    "audio_file": "PMO_AURORA_KEY.mp3",
     "definitions": {
         "F11": {
             "timing": [
