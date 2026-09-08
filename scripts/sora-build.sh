@@ -25,6 +25,14 @@ STAMP="$SHARE/.bundled-packs"
 
 mkdir -p "$CACHE_DIR" "$LIB_DIR" "$(dirname "$BIN")"
 
+# Single-flight: the service freshness check and the panel setup can invoke
+# this concurrently (shell start + auto-install overlap). Two pack syncs
+# rm/cp the same dirs and two installs restart the daemon twice — harmless
+# but stormy. The second runner waits on the lock instead.
+# ponytail: blocking flock, not -n + exit — a skipped install is worse than
+# a waited one; ceiling is one slow install delaying another, acceptable.
+[ "${FLOCKED:-}" = 1 ] || exec env FLOCKED=1 flock "$CACHE_DIR/build.lock" "$0" "$@"
+
 # Sync bundled soundpacks (plugin dir) -> share dir, where the daemon
 # actually reads them from. `sora-install` copies packs once with `cp -rn`;
 # without this step, pack changes delivered by `plugin update` would sit in

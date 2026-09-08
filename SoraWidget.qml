@@ -252,6 +252,18 @@ Panel {
   }
 
   property bool setupBusy: false
+  property int setupRetries: 0 // bounded auto-retry on setup failure, then manual button
+  Timer {
+    id: setupRetryTimer
+    interval: 10000
+    onTriggered: {
+      // Re-arm the one-shot auto-install so the next check retries: a
+      // failed attempt (deleted files, network blip) must not lock the
+      // panel out of recovering on its own.
+      root.automaticSetupAttempted = false
+      if (!installCheck.running) installCheck.running = true
+    }
+  }
   property bool settingsOpen: false
   property bool uninstallArmed: false
   property bool uninstallBusy: false
@@ -354,6 +366,7 @@ Panel {
 
   function install() {
     if (setupBusy) return
+    if (root.uninstallBusy || uninstallProc.running) return // never install mid-uninstall
     setupBusy = true
     root.statusKnown = false
     root.statusMissed = 0
@@ -546,6 +559,7 @@ Panel {
     // full wipe: the script removes binary, unit, packs, config, caches,
     // runtime files and the keyboard-access rule, then we unregister.
     if (root.uninstallBusy || uninstallProc.running) return
+    if (setupBusy || setupProc.running) return // never uninstall mid-install
     root.uninstallBusy = true
     uninstallProc.command = ["/usr/bin/bash", root.pluginDir + "/scripts/sora-uninstall.sh", "--purge"]
     uninstallProc.running = true
@@ -905,6 +919,7 @@ Panel {
       if (exitCode === 0) {
         root.installed = true
         root.errorToast = ""
+        root.setupRetries = 0
         root.statusKnown = false
         root.statusMissed = 0
         root.clearStreak = 0
@@ -916,6 +931,10 @@ Panel {
         var msg = err !== "" ? err.split("\n").pop() : (out !== "" ? out.split("\n").pop() : "Install failed.")
         root.errorToast = root.shortText(msg)
         clearErrorToast.restart()
+        if (root.setupRetries < 3 && !root.uninstallBusy && !uninstallProc.running) {
+          root.setupRetries += 1
+          setupRetryTimer.restart()
+        }
         installCheck.running = true
       }
     }
@@ -1362,6 +1381,7 @@ SoraDropdown {
               anchors.horizontalCenter: parent.horizontalCenter
               verticalPadding: root.buttonYPadding
               tooltipText: "Remove the plugin and stop the daemon"
+              enabled: !setupBusy && !setupProc.running
               onClicked: {
                 if (!root.uninstallArmed) { root.uninstallArmed = true; disarmUninstall.restart() }
                 else { root.uninstallArmed = false; root.remove() }
@@ -1386,7 +1406,7 @@ SoraDropdown {
             foreground: root.bar.foreground
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            enabled: !setupBusy
+            enabled: !setupBusy && !root.uninstallBusy && !uninstallProc.running
             onClicked: root.install()
           
           }
