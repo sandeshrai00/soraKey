@@ -560,10 +560,10 @@ mod tests {
         // Only one root now; the scanner keys the cache by `keyboard/name`.
         assert_eq!(
             relative_soundpack_id(
-                &native_path(&[&builtin_root(), "keyboard", "eg-oreo"]),
+                &native_path(&[&builtin_root(), "keyboard", "sample-pack"]),
                 &roots()
             ),
-            "keyboard/eg-oreo"
+            "keyboard/sample-pack"
         );
     }
 

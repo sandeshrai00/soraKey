@@ -301,8 +301,8 @@ mod tests {
                 "AltLeft": { "timing": [[45750.0, 45832.0], [45832.0, 45914.0]] },
                 "Escape": { "timing": [[2894.0, 3007.0], [3007.0, 3120.0]] }
             },
-            "id": "keyboad-cherrymx-black-abs",
-            "name": "CherryMX Black - ABS keycaps",
+            "id": "keyboard/sample-pack",
+            "name": "Sample Pack",
             "options": { "random_pitch": false, "recommended_volume": 1.0 },
             "icon": "black.jpg",
             "tags": []

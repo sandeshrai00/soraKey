@@ -189,48 +189,8 @@ impl AppConfig {
             Ok(mut config) => {
                 let mut config_updated = false;
 
-                // migrate old pack IDs
-                let migrate = |old: &str, new: &str| (old.to_string(), new.to_string());
-                let renames = [
-                    migrate("oreo", "keyboard/sankey-oreo"),
-                    migrate("keyboard/eg-oreo", "keyboard/sankey-oreo"),
-                    migrate(
-                        "keyboard/eg-crystal-purple",
-                        "keyboard/sankey-crystal-purple",
-                    ),
-                    migrate(
-                        "keyboard/cherrymx-black-abs",
-                        "keyboard/sankey-mx-black-abs",
-                    ),
-                    migrate(
-                        "keyboard/cherrymx-black-pbt",
-                        "keyboard/sankey-mx-black-pbt",
-                    ),
-                    migrate("keyboard/cherrymx-blue-abs", "keyboard/sankey-mx-blue-abs"),
-                    migrate("keyboard/cherrymx-blue-pbt", "keyboard/sankey-mx-blue-pbt"),
-                    migrate(
-                        "keyboard/cherrymx-brown-abs",
-                        "keyboard/sankey-mx-brown-abs",
-                    ),
-                    migrate(
-                        "keyboard/cherrymx-brown-pbt",
-                        "keyboard/sankey-mx-brown-pbt",
-                    ),
-                    migrate("keyboard/cherrymx-red-abs", "keyboard/sankey-mx-red-abs"),
-                    migrate("keyboard/cherrymx-red-pbt", "keyboard/sankey-mx-red-pbt"),
-                    migrate(
-                        "keyboard/topre-purple-hybrid-pbt",
-                        "keyboard/sankey-topre-purple",
-                    ),
-                ];
-                for (old, new) in renames {
-                    if config.keyboard_soundpack == old {
-                        crate::always_print!("🔄 Migrating keyboard soundpack: {} -> {}", old, new);
-                        config.keyboard_soundpack = new;
-                        config_updated = true;
-                        break;
-                    }
-                }
+                // No pack-ID migrations: removed packs are handled by the
+                // engine boot fallback (first available pack on disk).
 
                 // drop index-based device IDs — they're unstable, revert to default
 
@@ -331,7 +291,7 @@ impl Default for AppConfig {
             version: crate::utils::version::APP_VERSION.to_string(),
             last_updated: Utc::now(),
             commit: option_env!("GIT_HASH").map(|s| s.to_string()),
-            keyboard_soundpack: "keyboard/sankey-oreo".to_string(),
+            keyboard_soundpack: "keyboard/sugar65".to_string(),
             volume: 0.6,
             enable_sound: true,
             per_pack_volume: HashMap::new(),

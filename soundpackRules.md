@@ -10,7 +10,8 @@ validates EVERY `config.json` recursively — one bad file fails the whole suite
 daemon/soundpacks/keyboard/<pack-id>/
 ├── config.json
 ├── <PACK>_KEY.<ext>        single-method: exactly one audio file
-└── <pack-id>.jpg           optional icon (may omit, like sankey-crystal-purple)
+└── <pack-id>.jpg           optional icon (may omit; none of the
+                           bundled packs ships one)
 ```
 
 - `<pack-id>`: lowercase-hyphen only (`gravastar-v60-pro`). It becomes the
