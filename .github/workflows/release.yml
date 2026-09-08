@@ -1,6 +1,7 @@
 name: release-sorakey
 on:
   push:
+    branches: ["main"]
     tags: ["v*"]
 permissions:
   contents: write
@@ -22,6 +23,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Validate release identity
+        # Versioned tags only: on main pushes ref_name is "main" and there
+        # is no tag to compare — the rolling release needs no version check.
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
@@ -50,6 +54,15 @@ jobs:
           cp daemon/target/${{ matrix.target }}/release/sorakey dist/sorakey-${{ matrix.arch }}
           (cd dist && sha256sum sorakey-${{ matrix.arch }} > SHA256SUMS-${{ matrix.arch }})
           cat dist/SHA256SUMS-${{ matrix.arch }}
+      - name: Record built source hash
+        # The exact content stream sora-build.sh hashes on user machines
+        # (relative paths from the repo root, LC_ALL=C sort). The installer
+        # trusts a prebuilt ONLY when this matches its local source — this
+        # is what makes stale-asset installs impossible.
+        run: |
+          export LC_ALL=C
+          { find daemon -path daemon/target -prune -o \( -name "Cargo.toml" -o -name "Cargo.lock" -o -name "*.rs" \) -print0; printf '%s\0' "rust-toolchain.toml"; } | sort -z | xargs -0 cat | sha256sum | cut -d' ' -f1 > dist/source.sha256
+          cat dist/source.sha256
       - name: Attest binary
         uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
@@ -65,8 +78,10 @@ jobs:
           path: |
             dist/sorakey-${{ matrix.arch }}
             dist/SHA256SUMS-${{ matrix.arch }}
+            dist/source.sha256
   release:
     needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -86,5 +101,37 @@ jobs:
           files: |
             dist/sorakey-x86_64/sorakey-x86_64
             dist/sorakey-aarch64/sorakey-aarch64
+            dist/source.sha256
             dist/SHA256SUMS
           generate_release_notes: true
+  rolling:
+    # Every main commit publishes the prebuilt the installer actually uses.
+    # Users never compile: without this, any commit past the last versioned
+    # release would be uninstallable under the prebuilt-only policy.
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Download artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+      - name: Merge SHA256SUMS
+        run: |
+          cat dist/sorakey-*/SHA256SUMS-x86_64 dist/sorakey-*/SHA256SUMS-aarch64 > dist/SHA256SUMS
+          sed -i 's|dist/||g' dist/SHA256SUMS
+          sort -u -o dist/SHA256SUMS dist/SHA256SUMS
+          cat dist/SHA256SUMS
+          cat dist/sorakey-x86_64/source.sha256
+      - name: Update continuous prebuilt
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: continuous
+          name: "Latest prebuilt (main)"
+          body: "Rolling prebuilt for the current main commit. The installer matches it by source hash, never by tag position."
+          files: |
+            dist/sorakey-x86_64/sorakey-x86_64
+            dist/sorakey-aarch64/sorakey-aarch64
+            dist/sorakey-x86_64/source.sha256
+            dist/SHA256SUMS

@@ -25,6 +25,7 @@ Item {
   property string lastExportResult: ""
   property string lastExportError: ""
   property string lastSyncResult: ""
+  property string lastBuildError: ""
   // sticky stop: true if the user explicitly stopped the daemon (Panel writes the flag).
   // NOTE: Qt has no fileExists() — the previous readonly binding silently
   // evaluated false forever, auto-starting the daemon after every user Stop.
@@ -256,14 +257,32 @@ Item {
     }
   }
 
-  // after update, rebuild or fetch prebuilt and restart if needed
+  // after update, install the matching prebuilt and restart if needed.
+  // A failed install is LOUD: the old code returned silently and left the
+  // user on a stale binary with no trace. The message is the script's own
+  // reason line (already short), shown in the panel + desktop notification.
   Process {
     id: freshnessCheck
     command: ["/usr/bin/bash", root.pluginDir + "/scripts/sora-build.sh"]
     stdout: StdioCollector { waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
     onExited: function(exitCode) {
-      if (exitCode !== 0) return
+      if (exitCode !== 0) {
+        var errLines = String(stderr.text || "").trim().split("\n")
+        // The reason line carries the diagnosis ("no prebuilt for source
+        // <hash> — <why>"); the script's last line is only the generic
+        // policy hint, so prefer the reason when present.
+        var reason = "prebuilt install failed"
+        for (var i = 0; i < errLines.length; i++) {
+          if (errLines[i].indexOf("no prebuilt for source") !== -1) { reason = errLines[i]; break }
+        }
+        if (reason === "prebuilt install failed") reason = errLines[errLines.length - 1] || reason
+        root.lastBuildError = reason.slice(0, 220)
+        root.notify("Sorakey update failed", root.lastBuildError)
+        console.warn("sorakey freshness FAILED: " + reason)
+        return
+      }
+      root.lastBuildError = ""
       var out = String(stdout.text || "").trim()
       var lines = out.split("\n")
       var line = lines[lines.length - 1]

@@ -1,4 +1,15 @@
 #!/bin/bash
+# sora-build.sh — prebuilt-only daemon install + bundled-pack sync.
+#
+# Policy: user machines NEVER compile. The daemon binary comes exclusively
+# from the rolling `continuous` GitHub release, and only when that release
+# records the byte-identical source this tree holds (content-hash match, not
+# tag position — tags can move while assets stay stale). No match = hard
+# failure with a reason, never a local cargo build.
+#
+# Test hooks (never set in production):
+#   SORAKEY_RELEASE_BASE=file:///path/to/fake-release  — fetch fixtures
+#   SORAKEY_ALLOW_SOURCE=1                              — dev-only cargo build
 set -euo pipefail
 PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DAEMON_DIR="$PLUGIN_DIR/daemon"
@@ -8,6 +19,7 @@ TARGET_DIR="$CACHE_DIR/target"
 LIB_DIR="$HOME/.local/lib/sorakey"
 BIN="$HOME/.local/bin/sorakey"
 REPO="sandeshrai00/soraKey"
+RELEASE_BASE="${SORAKEY_RELEASE_BASE:-https://github.com/$REPO/releases/download/continuous}"
 SHARE="$HOME/.local/share/sorakey"
 STAMP="$SHARE/.bundled-packs"
 
@@ -64,59 +76,46 @@ sync_soundpacks() {
 }
 
 if ! version="$(python3 -c "import json;print(json.load(open('$MANIFEST'))['version'])" 2>/dev/null)"; then
-  # A corrupt manifest used to hide as version 0.0.0 ("no prebuilt, building
-  # from source") with no diagnostic — say so, then keep the safe fallback.
-  echo "sora-build: cannot parse version from $MANIFEST — treating as 0.0.0 (no prebuilt will match)" >&2
-  version="0.0.0"
+  echo "sora-build: cannot parse version from $MANIFEST" >&2
+  exit 1
 fi
 # Strict TOML parse (same form as release.yml): the old grep matched any
 # first `version` line and broke on reorder, comments, or `version="x"`.
 cargo_version="$(python3 -c 'import tomllib,sys;print(tomllib.load(open(sys.argv[1],"rb"))["package"]["version"])' "$DAEMON_DIR/Cargo.toml" 2>/dev/null || echo "")"
-# manifest and daemon versions must agree: the release gate proves
-# tag == manifest, so a manifest/daemon mismatch means no release can
-# vouch for this source — build locally instead of trusting a prebuilt.
-versions_match=0
-[[ -n "$cargo_version" && "$cargo_version" == "$version" ]] && versions_match=1
+# Manifest and daemon versions must agree: a mismatch means this tree is
+# internally inconsistent, and no release can vouch for it.
+if [[ -z "$cargo_version" || "$cargo_version" != "$version" ]]; then
+  echo "sora-build: manifest ($version) != daemon Cargo.toml (${cargo_version:-unreadable}) — refusing to install from an inconsistent tree" >&2
+  exit 1
+fi
 arch="$(uname -m)"
 case "$arch" in x86_64|aarch64) ;; *) arch="x86_64";; esac
 asset="sorakey-${arch}"
 
-# source hash for staleness
+# Canonical source hash. MUST stay byte-identical to the pipeline in
+# release.yml ("Record built source hash"): relative paths from the repo
+# root, LC_ALL=C sort (sort order is locale-dependent — without the pin,
+# identical trees hash differently on different boxes). Soundpacks are
+# data, not code: the binary never embeds them, so they stay out.
 source_id=""
 if command -v sha256sum >/dev/null 2>&1; then
-  source_id=$( { find "$DAEMON_DIR" -path "$DAEMON_DIR/target" -prune -o \( -name "Cargo.toml" -o -name "Cargo.lock" -o -name "*.rs" \) -print0;
-                 printf '%s\0' "$PLUGIN_DIR/rust-toolchain.toml"; } | sort -z | xargs -0 cat 2>/dev/null | sha256sum | cut -d' ' -f1)
-  if [[ -f "$LIB_DIR/source.sha256" ]] && [[ "$(cat "$LIB_DIR/source.sha256" 2>/dev/null)" == "$source_id" ]] && [[ -x "$BIN" ]]; then
-    # Binary is current: only packs may have moved. Skip the (identical)
-    # prebuilt download below; the sync line alone restarts the daemon.
-    sync_soundpacks
-    if [[ "$packs_changed" == 0 ]]; then
-      echo "sorakey up to date (source $source_id)"
-    else
-      echo "$SYNC_LINE"
-    fi
-    exit 0
-  fi
+  source_id=$(cd "$PLUGIN_DIR" && { find daemon -path daemon/target -prune -o \( -name "Cargo.toml" -o -name "Cargo.lock" -o -name "*.rs" \) -print0;
+                 printf '%s\0' "rust-toolchain.toml"; } | LC_ALL=C sort -z | xargs -0 cat 2>/dev/null | sha256sum | cut -d' ' -f1)
+else
+  echo "sora-build: sha256sum not found — cannot verify a prebuilt" >&2
+  exit 1
 fi
-
-# only trust release if the COMPILED source matches the tagged commit.
-# Soundpacks are data, not code: the binary never embeds them (source_id
-# above doesn't hash them either), so pack-only changes must not reject an
-# otherwise matching prebuilt. Docs promise this (docs/dev/relse.md); the
-# ':!daemon/soundpacks' exclusions below are what actually honors it.
-release_matches_source() {
-  command -v git >/dev/null 2>&1 || return 1
-  local dirty tag_commit
-  # manifest.json is deliberately NOT a gate path: only its `version` field
-  # matters for trust (download URL + versions_match + CI's tag==manifest
-  # check), so a description edit must not force a source build.
-  # Cargo.lock needs no explicit path either: it is tracked inside daemon/,
-  # so lock changes trip the diff below like any other source change.
-  dirty=$(git -C "$PLUGIN_DIR" status --porcelain --untracked-files=normal -- daemon rust-toolchain.toml ':!daemon/soundpacks' 2>/dev/null) || return 1
-  [[ -z "$dirty" ]] || return 1
-  tag_commit=$(git -C "$PLUGIN_DIR" rev-parse "refs/tags/v${version}^{commit}" 2>/dev/null) || return 1
-  git -C "$PLUGIN_DIR" diff --quiet "$tag_commit" HEAD -- daemon rust-toolchain.toml ':!daemon/soundpacks' 2>/dev/null || return 1
-}
+if [[ -f "$LIB_DIR/source.sha256" ]] && [[ "$(cat "$LIB_DIR/source.sha256" 2>/dev/null)" == "$source_id" ]] && [[ -x "$BIN" ]]; then
+  # Binary is current: only packs may have moved. Skip the download below;
+  # the sync line alone restarts the daemon.
+  sync_soundpacks
+  if [[ "$packs_changed" == 0 ]]; then
+    echo "sorakey up to date (source $source_id)"
+  else
+    echo "$SYNC_LINE"
+  fi
+  exit 0
+fi
 
 # gh can verify only when authenticated
 gh_can_verify() {
@@ -125,95 +124,125 @@ gh_can_verify() {
   GH_PROMPT_DISABLED=1 gh auth status --active >/dev/null 2>&1
 }
 
-try_download_prebuilt() {
-  release_matches_source || return 1
-  if [[ "$versions_match" != 1 ]]; then
-    echo "manifest ($version) != daemon Cargo.toml ($cargo_version) — building from source" >&2
-    return 1
+# Fetch a release file, printing "<http-code> <dest>" — file:// fixtures
+# (tests) report 200 on success, 000 when missing.
+fetch_release_file() {
+  local name="$1" dest="$2"
+  if [[ "$RELEASE_BASE" == file://* ]]; then
+    if cp "${RELEASE_BASE#file://}/$name" "$dest" 2>/dev/null; then
+      echo "200 $dest"
+    else
+      echo "000 $dest"
+    fi
+    return 0
   fi
-  command -v curl >/dev/null 2>&1 || return 1
-  command -v sha256sum >/dev/null 2>&1 || return 1
-  local url="https://github.com/$REPO/releases/download/v${version}/${asset}"
-  local sums="https://github.com/$REPO/releases/download/v${version}/SHA256SUMS"
+  command -v curl >/dev/null 2>&1 || { echo "000 $dest"; return 0; }
+  local code
+  code=$(curl --proto '=https' --tlsv1.2 -fsSL --max-time 120 -o "$dest" "$RELEASE_BASE/$name" -w '%{http_code}' 2>/dev/null) || code="000"
+  echo "$code $dest"
+}
+
+fail_no_prebuilt() {
+  # $1 = reason line. The contract: explain which side is wrong and what
+  # to do. Never fall through to a compile — user machines have no toolchain
+  # by design, and a silent wrong binary is worse than a loud refusal.
+  echo "sora-build: no prebuilt for source ${source_id:0:12} — $1" >&2
+  echo "sora-build: Sorakey never builds from source on your machine. Update the plugin (fresh commits need ~10 min for CI to publish), then retry." >&2
+  exit 1
+}
+
+try_download_prebuilt() {
   local tmp
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' RETURN
-  echo "Trying verified prebuilt $url ..."
-  # Capture HTTP codes (curl -w prints even on -f failure) so the failure
-  # says which it was: dead network, missing release, or missing checksums.
-  # -f still rejects error bodies; the codes below only route the message.
-  local asset_code sums_code
-  asset_code=$(curl --proto '=https' --tlsv1.2 -fsSL --max-time 120 -o "$tmp/$asset" "$url" -w '%{http_code}' 2>/dev/null) || true
-  sums_code=$(curl --proto '=https' --tlsv1.2 -fsSL --max-time 30 -o "$tmp/SHA256SUMS" "$sums" -w '%{http_code}' 2>/dev/null) || true
-  if [[ "$asset_code" == "200" && "$sums_code" == "200" ]]; then
+  local hash_code hash_file="$tmp/source.sha256"
+  read -r hash_code _ < <(fetch_release_file "source.sha256" "$hash_file")
+  case "$hash_code" in
+    000) fail_no_prebuilt "cannot reach the prebuilt release (no network, or no continuous release published yet)" ;;
+    404) fail_no_prebuilt "release has no source record yet (CI still building main?)" ;;
+    200) ;;
+    *) fail_no_prebuilt "source-record download failed (HTTP $hash_code)" ;;
+  esac
+  local built_source
+  built_source=$(tr -d '[:space:]' < "$hash_file" 2>/dev/null)
+  if [[ -z "$built_source" ]]; then
+    fail_no_prebuilt "release source record is empty — CI artifact corrupt, report this"
+  fi
+  if [[ "$built_source" != "$source_id" ]]; then
+    # Either side can be newer: local commits/CI lag, or (stale-asset bug
+    # class) a release that predates this source. Both refuse loudly.
+    fail_no_prebuilt "source mismatch (local ${source_id:0:12} != built ${built_source:0:12}) — local edits can never match (commit+push and wait for CI), otherwise wait for CI to publish this source"
+  fi
+  echo "Trying verified prebuilt $RELEASE_BASE/$asset ..."
+  local url_code sums_code
+  read -r url_code _ < <(fetch_release_file "$asset" "$tmp/$asset")
+  read -r sums_code _ < <(fetch_release_file "SHA256SUMS" "$tmp/SHA256SUMS")
+  if [[ "$url_code" == "200" && "$sums_code" == "200" ]]; then
     # normalize SHA256SUMS, then verify ONLY the downloaded asset.
     # (The file lists every arch; sha256sum -c over the whole file fails
     # on the binaries we didn't download, rejecting a good prebuilt.)
     sed -i "s|dist/||g; s|\*||g" "$tmp/SHA256SUMS" 2>/dev/null || true
+    local expected actual
     expected=$(awk -v a="$asset" '$2 == a {print $1; exit}' "$tmp/SHA256SUMS" 2>/dev/null)
     actual=$(sha256sum "$tmp/$asset" 2>/dev/null | awk '{print $1}')
     if [[ -n "$expected" && "$expected" == "$actual" ]]; then
       if gh_can_verify; then
         # Exit code stays the signal (output wording is not a contract);
         # the captured text only explains the warning below.
+        local att_out att_rc
         att_out=$(GH_PROMPT_DISABLED=1 gh attestation verify "$tmp/$asset" --repo "$REPO" \
              --cert-identity-regex "https://github.com/$REPO/.github/workflows/release.*" \
              --deny-self-hosted-runners 2>&1) && att_rc=0 || att_rc=$?
         if (( att_rc == 0 )); then
-          install -m 755 "$tmp/$asset" "$BIN" || return 1
-          [[ -n "$source_id" ]] && echo "$source_id" > "$LIB_DIR/source.sha256"
+          install -m 755 "$tmp/$asset" "$BIN" || fail_no_prebuilt "cannot write $BIN (permissions?)"
+          echo "$source_id" > "$LIB_DIR/source.sha256"
           rm -rf "$tmp"
           echo "Installed verified prebuilt $version $arch (attested)"
           return 0
         fi
-        # attestation failed — fall back to source build
-        echo "warning: attestation failed (${att_out:0:200}) — building from source" >&2
-        rm -rf "$tmp"
-        return 1
+        fail_no_prebuilt "attestation failed (${att_out:0:200}) — refusing an unattested binary"
       fi
       # no attestation possible — checksum already passed
-      install -m 755 "$tmp/$asset" "$BIN" || return 1
-      [[ -n "$source_id" ]] && echo "$source_id" > "$LIB_DIR/source.sha256"
+      install -m 755 "$tmp/$asset" "$BIN" || fail_no_prebuilt "cannot write $BIN (permissions?)"
+      echo "$source_id" > "$LIB_DIR/source.sha256"
       rm -rf "$tmp"
       echo "Installed prebuilt $version $arch (release checksum verified; attestation skipped — gh not logged in, run 'gh auth login' for the attested path)"
       return 0
     fi
-    echo "prebuilt checksum mismatch for $asset (expected $expected, got $actual) — building from source" >&2
+    fail_no_prebuilt "prebuilt checksum mismatch for $asset (expected ${expected:-empty}, got ${actual:-empty}) — release artifact corrupt, report this"
   else
-    case "$asset_code" in
-      000) echo "prebuilt download failed: no network / DNS / TLS route to github.com" >&2 ;;
-      404) echo "prebuilt download failed: no v${version} release assets (release missing?)" >&2 ;;
-      200) echo "prebuilt download failed: binary ok but checksum file missing (HTTP $sums_code)" >&2 ;;
-      *) echo "prebuilt download failed: HTTP $asset_code" >&2 ;;
+    case "$url_code" in
+      000) fail_no_prebuilt "no network route to the release host" ;;
+      404) fail_no_prebuilt "binary asset missing from the release (CI artifact incomplete?)" ;;
+      200) fail_no_prebuilt "binary ok but checksum file missing (HTTP $sums_code)" ;;
+      *) fail_no_prebuilt "binary download failed (HTTP $url_code)" ;;
     esac
   fi
-  rm -rf "$tmp" 2>/dev/null || true
-  return 1
 }
 
-# Binary is stale or missing: sync packs first so a rebuilt daemon never
-# starts against stale sound files, then resolve the binary as before.
-sync_soundpacks
-
-if [[ "${SORAKEY_BUILD_FROM_SOURCE:-}" != "1" ]]; then
-  if try_download_prebuilt; then
-    if [[ "$packs_changed" == 1 ]]; then echo "$SYNC_LINE"; fi
-    exit 0
+# Dev-only escape hatch. Default off: user machines take this path never.
+# Local uncommitted source can never match a CI prebuilt, so development
+# builds set SORAKEY_ALLOW_SOURCE=1 explicitly.
+if [[ "${SORAKEY_ALLOW_SOURCE:-}" == "1" ]]; then
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "SORAKEY_ALLOW_SOURCE=1 but cargo not found — install rustup, then re-run" >&2
+    exit 1
   fi
-  echo "No usable prebuilt for this source (no release yet, or source moved past the tag) — building from source"
+  sync_soundpacks
+  export SOURCE_DATE_EPOCH="$(git -C "$PLUGIN_DIR" log -1 --format=%ct 2>/dev/null || date +%s)"
+  export CARGO_INCREMENTAL=0
+  export CARGO_TERM_QUIET=true
+  cargo build --locked --release --manifest-path "$DAEMON_DIR/Cargo.toml" --target-dir "$TARGET_DIR"
+  install -m 755 "$TARGET_DIR/release/sorakey" "$BIN"
+  echo "$source_id" > "$LIB_DIR/source.sha256"
+  echo "Built from source (dev bypass SORAKEY_ALLOW_SOURCE=1) and installed $BIN"
+  if [[ "$packs_changed" == 1 ]]; then echo "$SYNC_LINE"; fi
+  exit 0
 fi
 
-if ! command -v cargo >/dev/null 2>&1; then
-  echo "cargo not found — install rustup (pacman -S rustup or https://rustup.rs) then re-run" >&2
-  exit 1
-fi
-
-# build outside plugin dir
-export SOURCE_DATE_EPOCH="$(git -C "$PLUGIN_DIR" log -1 --format=%ct 2>/dev/null || date +%s)"
-export CARGO_INCREMENTAL=0
-export CARGO_TERM_QUIET=true
-cargo build --locked --release --manifest-path "$DAEMON_DIR/Cargo.toml" --target-dir "$TARGET_DIR"
-install -m 755 "$TARGET_DIR/release/sorakey" "$BIN"
-[[ -n "$source_id" ]] && echo "$source_id" > "$LIB_DIR/source.sha256"
-echo "Built and installed $BIN"
+# Binary is stale or missing: sync packs first so a new daemon never
+# starts against stale sound files, then resolve the binary — prebuilt or
+# refusal, nothing in between.
+sync_soundpacks
+try_download_prebuilt
 if [[ "$packs_changed" == 1 ]]; then echo "$SYNC_LINE"; fi

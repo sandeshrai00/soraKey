@@ -95,11 +95,14 @@ omarchy plugin update io.github.sandeshrai00.sorakey --yes
 ```
 
 The QML updates in place. If the daemon source changed, the next shell start
-(or plugin reload) re-runs the installer — verified prebuilt when one matches
-the tagged source, else a source build — and restarts the daemon with the new
-binary automatically. Bundled soundpacks re-sync the same way (changed packs
-refresh, removed packs disappear, your imported packs are never touched) and
-the panel shows a "Soundpacks updated" toast when it happens.
+(or plugin reload) re-runs the installer — it downloads the CI prebuilt for
+that exact source (matched by content hash, never by tag) and restarts the
+daemon automatically. There is no source build on your machine: if no
+prebuilt matches yet (fresh commit, CI still building ~10 min), the panel
+shows the reason and keeps the current binary. Bundled soundpacks re-sync
+the same way (changed packs refresh, removed packs disappear, your imported
+packs are never touched) and the panel shows a "Soundpacks updated" toast
+when it happens.
 
 ## Remove
 
@@ -165,7 +168,7 @@ contain a `config.json` (V2 format).
 | `SoraKeyStore.js` | Status/pack parsing helpers |
 | `SoraPackPicker.qml` | Searchable soundpack picker |
 | `scripts/sora-install` | One-click installer |
-| `scripts/sora-build.sh` | Verified-prebuilt-or-source daemon build + bundled-pack sync |
+| `scripts/sora-build.sh` | Prebuilt-only daemon install (content-hash matched) + bundled-pack sync |
 | `scripts/sora-keyboard-access.sh` | One-approval keyboard-access enabler (udev rule) |
 | `scripts/sorakey-detached` | Reload-proof detached helper launcher (import/export dialogs) |
 | `scripts/sora-pack-import.py` | GTK4 file-picker + ZIP extractor |
@@ -188,14 +191,17 @@ contain a `config.json` (V2 format).
 $XDG_RUNTIME_DIR/sorakey.sock         control socket
 ```
 
-## Build the daemon by hand
+## Build the daemon by hand (developers only)
 
 ```sh
+SORAKEY_ALLOW_SOURCE=1 ./scripts/sora-build.sh
+# — or directly:
 cargo build --release --manifest-path daemon/Cargo.toml
 ```
 
 Requires `rustc` plus the native libs `alsa`, `libevdev`, `libx11`,
-`pkg-config` (already present on an Omarchy box).
+`pkg-config` (already present on an Omarchy box). User machines never do
+this: installs use the CI prebuilt or refuse loudly.
 
 ## License
 

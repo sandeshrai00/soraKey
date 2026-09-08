@@ -1,5 +1,6 @@
 #!/bin/bash
-# Sorakey installer — builds daemon, installs soundpacks, starts service.
+# Sorakey installer — installs daemon (verified prebuilt only), installs
+# soundpacks, starts service.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,10 +15,10 @@ UNIT="$UNIT_DIR/sorakey.service"
 step() { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 die()  { printf '\n\033[1;31msora-install: %s\033[0m\n' "$*" >&2; exit 1; }
 
-# 1. Build daemon
+# 1. Install daemon (verified prebuilt only — never compiled here)
 [[ -d "$DAEMON_DIR" ]] || die "daemon/ not found next to this script"
-step "Building sorakey (verified prebuilt if available, else source)"
-"$PLUGIN_DIR/scripts/sora-build.sh" || die "build failed — needs network for the prebuilt, or cargo/rustup for a source build"
+step "Installing sorakey (verified prebuilt only)"
+"$PLUGIN_DIR/scripts/sora-build.sh" || die "prebuilt install failed — see the reason above (no prebuilt for this source yet, or no network)"
 [[ -x "$BIN" ]] || die "build reported success but $BIN is missing/not executable"
 
 # 2. Install soundpacks

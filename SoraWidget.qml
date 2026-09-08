@@ -76,6 +76,7 @@ Panel {
 
   property string syncStatus: {
     if (!service) return ""
+    if (service.lastBuildError) return "Update failed: " + service.lastBuildError
     if (service.lastSyncResult) return "Soundpacks updated: " + service.lastSyncResult
     return ""
   }
