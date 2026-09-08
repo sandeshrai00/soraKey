@@ -33,14 +33,18 @@ if command -v sha256sum >/dev/null 2>&1; then
   fi
 fi
 
-# only trust release if source matches tagged commit
+# only trust release if the COMPILED source matches the tagged commit.
+# Soundpacks are data, not code: the binary never embeds them (source_id
+# above doesn't hash them either), so pack-only changes must not reject an
+# otherwise matching prebuilt. Docs promise this (docs/dev/relse.md); the
+# ':!daemon/soundpacks' exclusions below are what actually honors it.
 release_matches_source() {
   command -v git >/dev/null 2>&1 || return 1
   local dirty tag_commit
-  dirty=$(git -C "$PLUGIN_DIR" status --porcelain --untracked-files=normal -- daemon rust-toolchain.toml manifest.json 2>/dev/null) || return 1
+  dirty=$(git -C "$PLUGIN_DIR" status --porcelain --untracked-files=normal -- daemon rust-toolchain.toml manifest.json ':!daemon/soundpacks' 2>/dev/null) || return 1
   [[ -z "$dirty" ]] || return 1
   tag_commit=$(git -C "$PLUGIN_DIR" rev-parse "refs/tags/v${version}^{commit}" 2>/dev/null) || return 1
-  git -C "$PLUGIN_DIR" diff --quiet "$tag_commit" HEAD -- daemon rust-toolchain.toml manifest.json 2>/dev/null || return 1
+  git -C "$PLUGIN_DIR" diff --quiet "$tag_commit" HEAD -- daemon rust-toolchain.toml manifest.json ':!daemon/soundpacks' 2>/dev/null || return 1
 }
 
 # gh can verify only when authenticated
