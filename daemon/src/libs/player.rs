@@ -91,7 +91,7 @@ pub fn spawn_engine(
 /// `Mutex` - the thread is the only place that ever touches it, so plain
 /// fields are enough (this is the whole point of moving playback off the
 /// Arc<Mutex<...>> path used pre-Phase-3). Fields are `pub(super)` so
-/// `soundpack_loader.rs` (a sibling module) can update them after decoding.
+/// `pack_loader.rs` (a sibling module) can update them after decoding.
 pub(super) struct EngineState {
     stream: OutputStream,
     pub(super) stream_handle: OutputStreamHandle,
@@ -774,7 +774,7 @@ mod tests {
 
     /// The engine's own source, so the assertions below are checked against
     /// what actually ships rather than a description of it.
-    const ENGINE_SOURCE: &str = include_str!("engine.rs");
+    const ENGINE_SOURCE: &str = include_str!("player.rs");
 
     /// Everything above `mod tests`, i.e. the runtime code only. The test
     /// module names the removed symbols in its own assertions, so searching

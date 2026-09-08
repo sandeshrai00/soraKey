@@ -155,7 +155,7 @@ mod tests {
     fn the_metadata_read_path_never_writes_to_disk() {
         let src = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/utils/soundpack.rs"
+            "/src/utils/pack_info.rs"
         ))
         .expect("read own source");
         let start = src.find("pub fn load_soundpack_metadata").unwrap();
