@@ -25,6 +25,21 @@ fn audio_error_slot() -> &'static Mutex<Option<String>> {
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
+/// Last seen OS default-sink name (follow-default bookkeeping). `None` also
+/// counts: "no default device" is a state worth noticing exactly once.
+fn default_sink_slot() -> &'static Mutex<Option<Option<String>>> {
+    static SLOT: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+/// What actually opened: `None` = system default, `Some(id)` = explicit
+/// device. Written by the engine on open/switch; read by `status` so the
+/// panel never shows a selection the stream isn't on.
+fn opened_device_slot() -> &'static Mutex<Option<Option<String>>> {
+    static SLOT: OnceLock<Mutex<Option<Option<String>>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
 fn now_unix() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -64,6 +79,41 @@ pub fn set_audio_result(ok: bool, err: Option<String>) {
     if let Ok(mut slot) = audio_error_slot().lock() {
         *slot = err;
     }
+}
+
+/// Records the OS default-sink name seen by this status poll. Returns true
+/// exactly once per change (first sighting does NOT count — the engine seeds
+/// this at boot with what it opened, so a fresh daemon doesn't reopen on
+/// its first poll). The caller reopens the default stream on true.
+pub fn note_default_sink(current: Option<String>) -> bool {
+    if let Ok(mut slot) = default_sink_slot().lock() {
+        match slot.as_ref() {
+            // Unseeded (engine predates this / tests): seed silently.
+            None => {
+                *slot = Some(current);
+                return false;
+            }
+            Some(prev) if *prev == current => return false,
+            _ => {
+                *slot = Some(current);
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Engine reports which device the live stream is actually on.
+pub fn set_opened_device(opened: Option<String>) {
+    if let Ok(mut slot) = opened_device_slot().lock() {
+        *slot = Some(opened);
+    }
+}
+
+/// The device the live stream is on (`None` = system default, outer `None` =
+/// engine hasn't reported yet).
+pub fn opened_device() -> Option<Option<String>> {
+    opened_device_slot().lock().ok().and_then(|g| g.clone())
 }
 
 fn get_opt(slot: &'static Mutex<Option<String>>) -> Option<String> {
@@ -110,5 +160,29 @@ mod tests {
         set_input_error(None);
         PACK_STATE.store(0, Ordering::Relaxed);
         set_pack_result(true, None);
+    }
+
+    #[test]
+    fn default_sink_change_fires_exactly_once() {
+        // First sighting seeds silently (fresh daemon must not reopen on
+        // its first poll); a change fires once; repeats stay quiet.
+        // NOTE: global slot shared with other tests (a commands test drives
+        // `status`), so force a known state first instead of assuming fresh.
+        // Unique names keep parallel tests from colliding.
+        note_default_sink(Some("test-sink-gamma-base".to_string()));
+        assert!(!note_default_sink(Some("test-sink-gamma-base".to_string())));
+        assert!(note_default_sink(Some("test-sink-gamma-next".to_string())));
+        assert!(!note_default_sink(Some("test-sink-gamma-next".to_string())));
+        assert!(note_default_sink(None));
+        assert!(!note_default_sink(None));
+        // leave seeded; engine re-seeds at boot anyway.
+    }
+
+    #[test]
+    fn opened_device_round_trips() {
+        set_opened_device(None);
+        assert_eq!(opened_device(), Some(None));
+        set_opened_device(Some("test-device".to_string()));
+        assert_eq!(opened_device(), Some(Some("test-device".to_string())));
     }
 }

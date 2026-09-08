@@ -157,6 +157,15 @@ impl DeviceManager {
         Ok(None)
     }
 
+    /// Name of the current system default output, without a full
+    /// enumeration (enumerating activates every ALSA node: 100s of ms —
+    /// banned from polling paths; this single query is ~ms and safe on the
+    /// commands thread, which the follow-default check in `commands::status`
+    /// drives once per panel poll).
+    pub fn default_output_name(&self) -> Option<String> {
+        self.host.default_output_device()?.name().ok()
+    }
+
     /// Sample rate of the system default output without a full enumeration
     /// (enumerating activates every ALSA device: 100s of ms on the audio
     /// thread). The per-device rate comes from the already-opened `Device`
@@ -214,5 +223,21 @@ mod tests {
         )));
         assert!(!is_legacy_index_device_id("default"));
         assert!(!is_legacy_index_device_id("output_default"));
+    }
+
+    #[test]
+    fn default_name_query_agrees_with_enumeration() {
+        // The follow-default check calls this on every status poll, so it
+        // must never panic (headless CI has no audio: None is fine) and must
+        // agree with the enumerated default when both resolve.
+        let dm = DeviceManager::new();
+        let single = dm.default_output_name();
+        if let Some(name) = &single {
+            assert!(!name.is_empty());
+        }
+        if let Ok(devs) = dm.get_output_devices() {
+            let enumerated = devs.iter().find(|d| d.is_default).map(|d| &d.name);
+            assert_eq!(single.as_ref(), enumerated);
+        }
     }
 }

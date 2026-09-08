@@ -60,6 +60,16 @@ Settings → **AUDIO OUTPUT** lists the system's output devices (plus
 devices** refreshes the list. The choice persists and is reported by
 `status` as `audio_device`.
 
+**System default follows your OS**: if the default sink changes (e.g. you
+plug in a headset that becomes the default), the daemon reopens its stream
+on the new sink within seconds — no restart needed. An explicitly picked
+device is retried for ~60s when missing at startup (headsets that appear
+late after boot), then falls back to the default and says so. `status`
+also reports `audio_device_opened` — what the live stream is actually on —
+so the shown selection can never silently disagree with reality.
+Unplugging the selected device still goes quiet by design; reselect in
+Settings.
+
 ## Configure
 
 ```sh

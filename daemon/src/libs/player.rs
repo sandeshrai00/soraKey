@@ -165,38 +165,100 @@ fn open_stream(
     }
 }
 
+/// How long an explicitly selected device gets to appear before the engine
+/// gives up on it (USB headsets / PipeWire nodes routinely arrive after the
+/// daemon at boot or reinstall). Past this, the engine falls back to the
+/// system default and says so — it never silently keeps a selection the
+/// stream isn't on.
+const EXPLICIT_DEVICE_RETRIES: u32 = 12;
+const EXPLICIT_DEVICE_RETRY_SECS: u64 = 5;
+
+/// Opens the system default, retrying forever: killing the daemon for a
+/// late-appearing USB device would also kill input + ctl/status.
+fn open_default_retrying(
+    device_manager: &DeviceManager,
+) -> (
+    OutputStream,
+    OutputStreamHandle,
+    Option<String>,
+    Option<u32>,
+) {
+    loop {
+        match open_stream(device_manager, None) {
+            Ok(t) => break t,
+            Err(e) => {
+                crate::always_eprint!(
+                    "❌ [AudioEngine] no audio device available: {} - retrying in 5s",
+                    e
+                );
+                crate::state::status::set_audio_result(
+                    false,
+                    Some(format!("no audio device: {}", e)),
+                );
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+        }
+    }
+}
+
+/// Opens an explicitly selected device, giving it `EXPLICIT_DEVICE_RETRIES`
+/// × `EXPLICIT_DEVICE_RETRY_SECS` to appear before falling back to the
+/// default. Previously a single attempt meant a headset that enumerated a
+/// second after the daemon left the stream pinned to the speakers while the
+/// panel still showed the headset as selected.
+fn open_explicit_retrying(
+    device_manager: &DeviceManager,
+    id: &str,
+) -> (
+    OutputStream,
+    OutputStreamHandle,
+    Option<String>,
+    Option<u32>,
+) {
+    for attempt in 1..=EXPLICIT_DEVICE_RETRIES {
+        match open_stream(device_manager, Some(id)) {
+            Ok(t) => return t,
+            Err(e) => {
+                crate::always_eprint!(
+                    "⚠️ [AudioEngine] selected device {} unavailable (attempt {}/{}): {} - retrying in {}s",
+                    id,
+                    attempt,
+                    EXPLICIT_DEVICE_RETRIES,
+                    e,
+                    EXPLICIT_DEVICE_RETRY_SECS
+                );
+                crate::state::status::set_audio_result(
+                    false,
+                    Some(format!("waiting for selected audio device: {}", e)),
+                );
+                std::thread::sleep(std::time::Duration::from_secs(EXPLICIT_DEVICE_RETRY_SECS));
+            }
+        }
+    }
+    crate::always_eprint!(
+        "❌ [AudioEngine] selected device {} never appeared - falling back to default",
+        id
+    );
+    open_default_retrying(device_manager)
+}
+
 impl EngineState {
     fn new() -> Self {
         let device_manager = DeviceManager::new();
         let config = crate::state::settings_saver::current();
 
-        let (stream, stream_handle, opened_device_id, device_rate) = open_stream(
-            &device_manager,
-            config.selected_audio_device.as_deref(),
-        )
-        .unwrap_or_else(|e| {
-            crate::always_eprint!("❌ [AudioEngine] {} - falling back to default", e);
-            loop {
-                match open_stream(&device_manager, None) {
-                    Ok(t) => break t,
-                    Err(e2) => {
-                        // No audio device (yet): stay alive serving
-                        // input + ctl/status and retry instead of
-                        // killing the daemon (USB devices appear late).
-                        crate::always_eprint!(
-                            "❌ [AudioEngine] no audio device available: {} - retrying in 5s",
-                            e2
-                        );
-                        crate::state::status::set_audio_result(
-                            false,
-                            Some(format!("no audio device: {}", e2)),
-                        );
-                        std::thread::sleep(std::time::Duration::from_secs(5));
-                    }
-                }
-            }
-        });
+        let (stream, stream_handle, opened_device_id, device_rate) =
+            match config.selected_audio_device.as_deref() {
+                Some(id) => open_explicit_retrying(&device_manager, id),
+                None => open_default_retrying(&device_manager),
+            };
         let current_device_id = opened_device_id;
+        // What the stream is actually on (panel reads this back so the shown
+        // selection can never disagree with the live stream).
+        crate::state::status::set_opened_device(current_device_id.clone());
+        // Seed the follow-default bookkeeping with what we opened on, so the
+        // first status poll doesn't count as a "change" (see note_default_sink).
+        crate::state::status::note_default_sink(device_manager.default_output_name());
         crate::state::status::set_audio_result(true, None);
 
         Self {
@@ -293,6 +355,7 @@ impl EngineState {
         self.stream_handle = new_handle;
         self.device_rate = new_rate;
         self.current_device_id = opened_device_id.clone().or(device_id);
+        crate::state::status::set_opened_device(self.current_device_id.clone());
         self.prepare_pack();
 
         let label = self
@@ -745,6 +808,12 @@ fn run_engine(
     // quiet, the config keeps the selection, and the user reselects a device in
     // Settings (or restarts). Manual switching via `AudioCommand::SwitchDevice`
     // is unaffected. Do not reintroduce periodic enumeration here.
+    //
+    // Following the OS default sink lives OUTSIDE this loop, on purpose: the
+    // commands thread runs one cheap default-name query per `status` poll
+    // (see `commands::status` + `DeviceManager::default_output_name`) and
+    // sends `SwitchDevice(None)` on change. No timer here, no enumeration,
+    // no keystroke stalls.
     loop {
         crossbeam_channel::select! {
             recv(cmd_rx) -> msg => {
@@ -845,6 +914,20 @@ mod tests {
         // the only way playback moves between devices.
         assert!(runtime_source().contains("AudioCommand::SwitchDevice"));
         assert!(runtime_source().contains("fn switch_device"));
+    }
+
+    #[test]
+    fn explicit_device_gets_retries_before_fallback() {
+        // The pinned-to-speakers defect: a headset that enumerated a second
+        // after the daemon fell back to default permanently on the first
+        // failed open. Boot must retry the explicit selection (bounded)
+        // before giving up to the default — and must report the wait, not
+        // claim audio is fine.
+        let src = runtime_source();
+        assert!(src.contains("open_explicit_retrying"));
+        assert!(src.contains("EXPLICIT_DEVICE_RETRIES"));
+        assert!(src.contains("waiting for selected audio device"));
+        assert!(src.contains("set_opened_device"));
     }
 
     #[test]

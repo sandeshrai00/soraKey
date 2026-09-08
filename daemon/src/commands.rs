@@ -107,7 +107,7 @@ fn dispatch(request: &str, engine: &AudioEngineHandle) -> String {
     let cmd = req.get("cmd").and_then(|c| c.as_str()).unwrap_or("");
 
     match cmd {
-        "status" => status(),
+        "status" => status(engine),
         "set_bar_section" => set_bar_section(&req),
         "get_bar_section" => get_bar_section(),
         "mute" => {
@@ -152,7 +152,7 @@ fn clamp_percent(v: Option<&serde_json::Value>) -> Option<f32> {
     Some(n as f32)
 }
 
-fn status() -> String {
+fn status(engine: &AudioEngineHandle) -> String {
     let c = crate::state::settings_saver::current();
     let eff = c.effective_volume();
     let per = c
@@ -160,6 +160,21 @@ fn status() -> String {
         .get(&c.keyboard_soundpack)
         .copied()
         .unwrap_or(eff);
+    // Follow the OS default sink while "System Default" is selected: the
+    // engine pins its stream to whatever sink was default at open (daemon
+    // start often wins that race against headsets), so a later default-sink
+    // change must reopen the stream or sound stays on the old sink until a
+    // restart. One cheap default-name query per poll (no enumeration — that
+    // would stall keystrokes); fires at most once per change, and a failed
+    // reopen keeps the old stream playing (switch_device semantics).
+    if c.selected_audio_device.is_none()
+        && crate::state::status::note_default_sink(
+            crate::libs::speakers::DeviceManager::new().default_output_name(),
+        )
+        && !engine.send(AudioCommand::SwitchDevice(None))
+    {
+        crate::always_eprint!("⚠️ [status] default sink changed but engine is unavailable");
+    }
     let mut v = serde_json::json!({
         "running": true,
         "muted": !c.enable_sound,
@@ -167,6 +182,10 @@ fn status() -> String {
         "per_pack_volume": (per * 100.0).round(),
         "keyboard_pack": c.keyboard_soundpack,
         "audio_device": c.selected_audio_device,
+        // What the live stream is actually on: None = system default. The
+        // panel must treat a mismatch with `audio_device` as "waiting for
+        // device", never as playing on the selection.
+        "audio_device_opened": crate::state::status::opened_device(),
     });
     // Health explains "running but silent" (input capture, pack load, audio).
     if let Some(obj) = v.as_object_mut() {
