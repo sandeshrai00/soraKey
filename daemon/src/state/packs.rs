@@ -1,5 +1,5 @@
 use crate::state::folders;
-use crate::utils::{json_files, files, pack_info};
+use crate::utils::{files, json_files, pack_info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -131,20 +131,21 @@ impl SoundpackCache {
 
     pub(crate) fn load_locked() -> Self {
         let cache_file = Self::cache_file();
-        let mut cache =
-            match json_files::load_json_from_file::<SoundpackCache>(std::path::Path::new(&cache_file)) {
-                Ok(cache) => {
-                    crate::always_print!(
-                        "📦 Loaded soundpack metadata cache with {} entries",
-                        cache.soundpacks.len()
-                    );
-                    cache
-                }
-                Err(e) => {
-                    crate::always_eprint!("⚠️  Failed to load cache file: {}", e);
-                    Self::new()
-                }
-            };
+        let mut cache = match json_files::load_json_from_file::<SoundpackCache>(
+            std::path::Path::new(&cache_file),
+        ) {
+            Ok(cache) => {
+                crate::always_print!(
+                    "📦 Loaded soundpack metadata cache with {} entries",
+                    cache.soundpacks.len()
+                );
+                cache
+            }
+            Err(e) => {
+                crate::always_eprint!("⚠️  Failed to load cache file: {}", e);
+                Self::new()
+            }
+        };
 
         if cache.soundpacks.is_empty() {
             crate::always_print!("🔄 Cache is empty, refreshing from soundpack directories...");

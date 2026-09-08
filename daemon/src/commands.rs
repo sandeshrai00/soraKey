@@ -1,8 +1,8 @@
 //! Control API over Unix socket (`$XDG_RUNTIME_DIR/sorakey.sock`).
 //! One JSON line in, one out. All writes go through config_writer + engine.
 
-use crate::libs::player::{AudioCommand, AudioEngineHandle};
 use crate::libs::names::qualify_soundpack_id;
+use crate::libs::player::{AudioCommand, AudioEngineHandle};
 use crate::state::folders;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -201,10 +201,7 @@ fn key_event(req: &serde_json::Value, engine: &AudioEngineHandle) -> String {
 }
 
 fn is_known_key_code(code: &str) -> bool {
-    if crate::utils::keys::KEY_MAP
-        .iter()
-        .any(|&(_, n)| n == code)
-    {
+    if crate::utils::keys::KEY_MAP.iter().any(|&(_, n)| n == code) {
         return true;
     }
     matches!(

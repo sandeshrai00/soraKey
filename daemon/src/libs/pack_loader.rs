@@ -62,8 +62,12 @@ fn load_audio_file_for_path(
     match device_rate {
         Some(device_rate) if device_rate != file_rate => {
             let start = std::time::Instant::now();
-            let resampled =
-                super::sound_quality::resample_interleaved(&samples, channels, file_rate, device_rate);
+            let resampled = super::sound_quality::resample_interleaved(
+                &samples,
+                channels,
+                file_rate,
+                device_rate,
+            );
             crate::always_print!(
                 "🔁 Resampled soundpack audio {}Hz -> {}Hz in {:.1}ms (Cubic 64/32 0.95)",
                 file_rate,

@@ -40,10 +40,7 @@ pub enum AudioCommand {
     },
     /// Internal: the off-engine-thread pack-load worker finished; `seq` is the
     /// request sequence it was spawned for (stale results are dropped).
-    PackLoaded(
-        u64,
-        Box<Result<super::pack_loader::LoadedPack, String>>,
-    ),
+    PackLoaded(u64, Box<Result<super::pack_loader::LoadedPack, String>>),
     SwitchDevice(Option<String>), // None = system default
 }
 
@@ -664,10 +661,8 @@ fn run_engine(
     // precompute in one pass, on this thread - nothing else is running yet).
     let config = crate::state::settings_saver::current();
     if !config.keyboard_soundpack.is_empty() {
-        match super::pack_loader::load_pack_prepared(
-            &config.keyboard_soundpack,
-            state.device_rate,
-        ) {
+        match super::pack_loader::load_pack_prepared(&config.keyboard_soundpack, state.device_rate)
+        {
             Ok(pack) => {
                 state.pack = Some(pack);
                 crate::state::status::set_pack_result(true, None);
@@ -681,10 +676,7 @@ fn run_engine(
                 match first_available_pack() {
                     Some(fallback) if fallback != config.keyboard_soundpack => {
                         crate::always_print!("🔄 [Engine] Falling back to {}", fallback);
-                        match super::pack_loader::load_pack_prepared(
-                            &fallback,
-                            state.device_rate,
-                        ) {
+                        match super::pack_loader::load_pack_prepared(&fallback, state.device_rate) {
                             Ok(pack) => {
                                 state.pack = Some(pack);
                                 let rec = recommended_volume_for_pack(&fallback);

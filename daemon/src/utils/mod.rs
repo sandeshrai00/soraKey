@@ -1,11 +1,11 @@
 pub mod auto_start;
-pub mod old_pack_fixer;
-pub mod version;
+pub mod files;
 pub mod json_files;
 pub mod keys;
 pub mod logs;
-pub mod printer;
-pub mod files;
-pub mod pack_info;
+pub mod old_pack_fixer;
 pub mod pack_checker;
+pub mod pack_info;
+pub mod printer;
 pub mod sound_reader;
+pub mod version;
