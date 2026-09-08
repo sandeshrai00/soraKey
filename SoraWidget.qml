@@ -681,10 +681,14 @@ Panel {
       }
    }
 
-  // Detect (re)install without a daemon: is the binary there?
+  // Detect (re)install without a daemon: the install is complete only
+  // when BOTH the binary and the service unit exist. Binary-without-unit
+  // (uninstall kept ~/.local/bin, manual unit delete) used to read as
+  // "installed": setup never ran, auto-start skipped silently, and every
+  // device query failed with "Device refresh failed". Now it re-installs.
   Process {
     id: installCheck
-    command: ["test", "-x", root.sorakeyBin]
+    command: ["/usr/bin/bash", "-c", 'test -x "$1" && test -f "$2"', "_", root.sorakeyBin, root.home + "/.config/systemd/user/sorakey.service"]
     onExited: function(exitCode) {
       root.installed = (exitCode === 0)
       if (root.installed) {
