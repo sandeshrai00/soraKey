@@ -8,8 +8,55 @@ TARGET_DIR="$CACHE_DIR/target"
 LIB_DIR="$HOME/.local/lib/sorakey"
 BIN="$HOME/.local/bin/sorakey"
 REPO="sandeshrai00/soraKey"
+SHARE="$HOME/.local/share/sorakey"
+STAMP="$SHARE/.bundled-packs"
 
 mkdir -p "$CACHE_DIR" "$LIB_DIR" "$(dirname "$BIN")"
+
+# Sync bundled soundpacks (plugin dir) -> share dir, where the daemon
+# actually reads them from. `sora-install` copies packs once with `cp -rn`;
+# without this step, pack changes delivered by `plugin update` would sit in
+# the plugin dir forever while the daemon plays stale copies.
+# Prints nothing on success unless something changed, when SYNC_LINE carries
+# the machine-readable last line the panel notifies on. Warnings go to
+# stderr only — a sync failure must never break the binary flow below.
+# User-imported packs (never bundled, never stamped) are never touched.
+packs_changed=0
+SYNC_LINE=""
+sync_soundpacks() {
+  local src_dir="$DAEMON_DIR/soundpacks/keyboard"
+  [[ -d "$src_dir" ]] || { echo "soundpacks sync warning: $src_dir missing" >&2; return 0; }
+  mkdir -p "$SHARE/soundpacks/keyboard"
+  local updated=0 removed=0
+  local stamp_tmp; stamp_tmp=$(mktemp)
+  local src id dst
+  for src in "$src_dir"/*/; do
+    [[ -d "$src" ]] || continue
+    id=$(basename "$src")
+    dst="$SHARE/soundpacks/keyboard/$id"
+    if [[ ! -d "$dst" ]] || ! diff -qr "$src" "$dst" >/dev/null 2>&1; then
+      rm -rf "$dst"
+      cp -r "$src" "$dst" || { echo "soundpacks sync warning: copy failed for $id" >&2; continue; }
+      updated=$((updated + 1))
+    fi
+    echo "$id" >> "$stamp_tmp"
+  done
+  if [[ -f "$STAMP" ]]; then
+    local old_id
+    while read -r old_id _; do
+      [[ -n "$old_id" ]] || continue
+      if [[ ! -d "$src_dir/$old_id" ]] && [[ -d "$SHARE/soundpacks/keyboard/$old_id" ]]; then
+        rm -rf "$SHARE/soundpacks/keyboard/$old_id" && removed=$((removed + 1))
+      fi
+    done < "$STAMP" || true
+  fi
+  mv "$stamp_tmp" "$STAMP"
+  if [[ "$updated" != 0 || "$removed" != 0 ]]; then
+    packs_changed=1
+    SYNC_LINE="soundpacks synced ($updated updated, $removed removed)"
+  fi
+  return 0
+}
 
 version="$(python3 -c "import json;print(json.load(open('$MANIFEST'))['version'])" 2>/dev/null || echo "0.0.0")"
 cargo_version="$(grep -m1 '^version' "$DAEMON_DIR/Cargo.toml" 2>/dev/null | sed 's/.*"\(.*\)"/\1/' || echo "")"
@@ -28,7 +75,14 @@ if command -v sha256sum >/dev/null 2>&1; then
   source_id=$( { find "$DAEMON_DIR" -path "$DAEMON_DIR/target" -prune -o \( -name "Cargo.toml" -o -name "Cargo.lock" -o -name "*.rs" \) -print0;
                  printf '%s\0' "$PLUGIN_DIR/rust-toolchain.toml"; } | sort -z | xargs -0 cat 2>/dev/null | sha256sum | cut -d' ' -f1)
   if [[ -f "$LIB_DIR/source.sha256" ]] && [[ "$(cat "$LIB_DIR/source.sha256" 2>/dev/null)" == "$source_id" ]] && [[ -x "$BIN" ]]; then
-    echo "sorakey up to date (source $source_id)"
+    # Binary is current: only packs may have moved. Skip the (identical)
+    # prebuilt download below; the sync line alone restarts the daemon.
+    sync_soundpacks
+    if [[ "$packs_changed" == 0 ]]; then
+      echo "sorakey up to date (source $source_id)"
+    else
+      echo "$SYNC_LINE"
+    fi
     exit 0
   fi
 fi
@@ -104,8 +158,15 @@ try_download_prebuilt() {
   return 1
 }
 
+# Binary is stale or missing: sync packs first so a rebuilt daemon never
+# starts against stale sound files, then resolve the binary as before.
+sync_soundpacks
+
 if [[ "${SORAKEY_BUILD_FROM_SOURCE:-}" != "1" ]]; then
-  if try_download_prebuilt; then exit 0; fi
+  if try_download_prebuilt; then
+    if [[ "$packs_changed" == 1 ]]; then echo "$SYNC_LINE"; fi
+    exit 0
+  fi
   echo "No usable prebuilt for this source (no release yet, or source moved past the tag) — building from source"
 fi
 
@@ -122,3 +183,4 @@ cargo build --locked --release --manifest-path "$DAEMON_DIR/Cargo.toml" --target
 install -m 755 "$TARGET_DIR/release/sorakey" "$BIN"
 [[ -n "$source_id" ]] && echo "$source_id" > "$LIB_DIR/source.sha256"
 echo "Built and installed $BIN"
+if [[ "$packs_changed" == 1 ]]; then echo "$SYNC_LINE"; fi

@@ -24,6 +24,7 @@ Item {
   property bool exporting: false
   property string lastExportResult: ""
   property string lastExportError: ""
+  property string lastSyncResult: ""
   // sticky stop: true if the user explicitly stopped the daemon (Panel writes the flag)
   readonly property bool stoppedFlag: Qt.fileExists("file:///" + Quickshell.env("HOME") + "/.local/share/sorakey/stopped")
 
@@ -247,6 +248,12 @@ Item {
       var line = lines[lines.length - 1]
       console.info("sorakey freshness: " + line)
       if (line.indexOf("up to date") !== -1) return
+      // pack sync piggybacks the freshness run: same toast pattern as
+      // import/export (scripts print, QML notifies — scripts run headless).
+      if (line.indexOf("soundpacks synced") !== -1) {
+        root.lastSyncResult = line
+        root.notify("Soundpacks updated", line)
+      }
       Quickshell.execDetached(["systemctl", "--user", "restart", "sorakey"])
     }
   }

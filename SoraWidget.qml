@@ -73,6 +73,12 @@ Panel {
     service.exportLogs()
   }
 
+  property string syncStatus: {
+    if (!service) return ""
+    if (service.lastSyncResult) return "Soundpacks updated: " + service.lastSyncResult
+    return ""
+  }
+
   // last reading
   property bool installed: false
   property bool running: false
@@ -113,6 +119,7 @@ Panel {
   property string lastResult: ""
   onImportStatusChanged: if (root.importStatus !== "") root.lastResult = String(root.importStatus).slice(0, 500)
   onExportStatusChanged: if (root.exportStatus !== "") root.lastResult = String(root.exportStatus).slice(0, 500)
+  onSyncStatusChanged: if (root.syncStatus !== "") root.lastResult = String(root.syncStatus).slice(0, 500)
   onErrorToastChanged: if (root.errorToast !== "") root.lastResult = String(root.errorToast).slice(0, 500)
   onUpdateStatusChanged: if (root.updateStatus !== "") root.lastResult = String(root.updateStatus).slice(0, 500)
   onCaptureStatusChanged: if (root.captureStatus !== "") root.lastResult = String(root.captureStatus).slice(0, 500)

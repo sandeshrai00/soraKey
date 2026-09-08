@@ -87,7 +87,9 @@ omarchy plugin update io.github.sandeshrai00.sorakey --yes
 The QML updates in place. If the daemon source changed, the next shell start
 (or plugin reload) re-runs the installer — verified prebuilt when one matches
 the tagged source, else a source build — and restarts the daemon with the new
-binary automatically.
+binary automatically. Bundled soundpacks re-sync the same way (changed packs
+refresh, removed packs disappear, your imported packs are never touched) and
+the panel shows a "Soundpacks updated" toast when it happens.
 
 ## Remove
 
