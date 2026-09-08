@@ -28,10 +28,21 @@ mkdir -p "$CACHE_DIR" "$LIB_DIR" "$(dirname "$BIN")"
 # Single-flight: the service freshness check and the panel setup can invoke
 # this concurrently (shell start + auto-install overlap). Two pack syncs
 # rm/cp the same dirs and two installs restart the daemon twice — harmless
-# but stormy. The second runner waits on the lock instead.
-# ponytail: blocking flock, not -n + exit — a skipped install is worse than
-# a waited one; ceiling is one slow install delaying another, acceptable.
-[ "${FLOCKED:-}" = 1 ] || exec env FLOCKED=1 flock "$CACHE_DIR/build.lock" "$0" "$@"
+# but stormy. The second runner waits on the lock instead, capped at 90s:
+# a prebuilt fetch can legitimately take ~2 min (120s curl), but an
+# indefinite stall (dead holder, stale lock) is worse than a loud skip —
+# the caller retries (auto: bounded setupRetries; manual: unlimited taps).
+# (No exec here: the fallback message must run in THIS shell after flock
+# times out. Missing flock degrades to unlocked rather than failing.)
+# ponytail: -w 90, not infinite flock — ceiling is one skipped-then-retried
+# install under a wedged lock, acceptable vs hanging the panel forever.
+if [ "${FLOCKED:-}" != 1 ] && command -v flock >/dev/null 2>&1; then
+  env FLOCKED=1 flock -w 90 "$CACHE_DIR/build.lock" "$0" "$@"
+  rc=$?
+  if [ $rc -eq 0 ]; then exit 0; fi
+  echo "sora-build: another install is still running after 90s — try again" >&2
+  exit 1
+fi
 
 # Sync bundled soundpacks (plugin dir) -> share dir, where the daemon
 # actually reads them from. `sora-install` copies packs once with `cp -rn`;
