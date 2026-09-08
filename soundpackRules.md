@@ -65,6 +65,13 @@ Top-level keys in THIS order, no more, no less:
 - `definitions`: every entry is `{"timing": [[start, end], ...]}`.
   Timings are finite numbers with `start < end`. Copy them verbatim from
   the source pack — never hand-edit a number.
+- **Full coverage is mandatory.** Every pack must define all 129 keys of
+  the reference set (`epomaker-rt85` is the reference). A missing key is
+  silent at runtime — the engine skips it with no error
+  (`player.rs:handle_key_event`). Fill gaps by deep-copying the timing
+  window of the closest donor (same digit for numpad digits, mirror
+  modifier, same key family, neutral click for media keys) — never by
+  inventing timings.
 
 ## 4. FORBIDDEN keys (do not add)
 
