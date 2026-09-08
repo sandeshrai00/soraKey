@@ -235,7 +235,12 @@ impl AppConfig {
                 // save if migrated
                 if config_updated {
                     config.last_updated = chrono::Utc::now();
-                    let _ = config.save();
+                    if let Err(e) = config.save() {
+                        // Migration applied in memory but not persisted: say
+                        // so loudly, or the user runs migrated settings that
+                        // revert on next start with no explanation.
+                        crate::always_eprint!("❌ Migrated config could not be saved: {}", e);
+                    }
                 }
 
                 config
@@ -250,7 +255,9 @@ impl AppConfig {
                     Preserved::Nothing => {
                         // first run, nothing to preserve
                         let default_config = Self::default();
-                        let _ = default_config.save();
+                        if let Err(e) = default_config.save() {
+                            crate::always_eprint!("❌ Default config could not be saved: {}", e);
+                        }
                         default_config
                     }
                     Preserved::MovedTo(backup) => {
@@ -260,7 +267,9 @@ impl AppConfig {
                         );
                         crate::always_eprint!("   Defaults are in use for this session.");
                         let default_config = Self::default();
-                        let _ = default_config.save();
+                        if let Err(e) = default_config.save() {
+                            crate::always_eprint!("❌ Default config could not be saved: {}", e);
+                        }
                         default_config
                     }
                     Preserved::Failed(err) => {

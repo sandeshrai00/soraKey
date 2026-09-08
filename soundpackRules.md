@@ -27,13 +27,15 @@ daemon/soundpacks/keyboard/<pack-id>/
 
 - Names: UPPERCASE `<PACK>_KEY.<ext>`, extension stays lowercase
   (`AULA_KEY.wav`, `GRAVASTAR_KEY.mp3`, `SORA_KEY1.wav`).
-- Formats that decode: `wav`, `mp3`, `ogg`
-  (symphonia features in `daemon/Cargo.toml`). Nothing else.
+- Formats that decode: `wav`, `mp3`, `ogg`, `m4a`/`aac`
+  (symphonia features in `daemon/Cargo.toml`: `mp3, wav, ogg, isomp4, aac`).
+  Nothing else.
 - Audio bytes are never edited — renames are filename-only (verify with md5).
 
 ## 3. config.json — exact shape
 
-Top-level keys in THIS order, no more, no less:
+Required key SET (order is convention for readable diffs, not law — the
+validator ignores order; missing/extra keys are what fail CI):
 
 ```json
 {
@@ -61,8 +63,10 @@ Top-level keys in THIS order, no more, no less:
 - `definition_method`: `"single"` (one shared file) or `"multi"`
   (per-key files).
 - Single-method: top-level `audio_file` is REQUIRED (must exist on disk).
-- Multi-method: NO top-level `audio_file`. Each key maps to its own file:
-  `"Escape": {"timing": [[0.0, 183.4]], "audio_file": "SORA_KEY1.wav"}`.
+- Multi-method: NO top-level `audio_file`. Each sounding key maps to its
+  own file: `"Escape": {"timing": [[0.0, 183.4]], "audio_file": "SORA_KEY1.wav"}`.
+  A key without `audio_file` is silent — never ship that in a bundled pack
+  (see full coverage below).
 - `definitions`: every entry is `{"timing": [[start, end], ...]}`.
   Timings are finite numbers with `start < end`. Copy them verbatim from
   the source pack — never hand-edit a number.
@@ -76,11 +80,14 @@ Top-level keys in THIS order, no more, no less:
 
 ## 4. FORBIDDEN keys (do not add)
 
-`options`, `tags`, `description`, `soundpack_type`, `defs`, `defines`,
+`tags`, `description`, `soundpack_type`, `defs`, `defines`,
 `icon` (unless a real jpg ships with the pack), `version`, `sound`.
 
-- `options`/`tags`/`description`: stripped from all bundled packs.
-  (A `recommended_volume` of 1.0 is the default anyway; `tags:
+- `options`: omit it UNLESS the pack needs `recommended_volume` different
+  from `1.0` — the daemon reads `options.recommended_volume` for per-pack
+  volume (`commands.rs`), so `1.0` (the default) is the only value that may
+  be stripped. Never ship `random_pitch` (always false, unused).
+- `tags`/`description`: stripped from all bundled packs. (`tags:
   ["pre-installed"]` is only for release-time batch edits, never by hand.)
 - `soundpack_type`: dead — nothing in `daemon/src` reads it.
 - `defs`/`defines`: legacy V1 spellings. The validator accepts `defs` as
@@ -109,7 +116,9 @@ Top-level keys in THIS order, no more, no less:
   (see `docs/dev/relse.md`). Pack-files-only changes need NO release.
 - Existing users keep their saved `keyboard_soundpack` — a new default
   affects fresh installs only. To migrate existing users, add a
-  `migrate(old, new)` entry in `settings.rs` next to the others.
-- Live-test: `sora-pack-import.py` the pack (or copy to
-  `~/.local/share/sorakey/soundpacks/keyboard/`), `./admin-scripts/dev-sync.sh`,
-  switch packs in the panel, type keys, listen.
+  `migrate(old, new)` entry in `settings.rs` (no migration table ships
+  anymore; removed packs fall through to the boot fallback).
+- Live-test: import via the panel (runs `scripts/sora-pack-import.py`
+  detached), or copy to `~/.local/share/sorakey/soundpacks/keyboard/`
+  + `./admin-scripts/dev-sync.sh`, switch packs in the panel, type keys,
+  listen.

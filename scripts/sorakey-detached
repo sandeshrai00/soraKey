@@ -13,11 +13,26 @@
 #     on it after a restart), removes any stale <result-file>
 #   - <cmd> must append its single result line (OK:.../ERROR:...) to
 #     <result-file> when done (our pickers take --result-file for this)
-set -u
+set -euo pipefail
+[[ $# -ge 2 ]] || { echo "Usage: sorakey-detached <result-file> <cmd> [args...]" >&2; exit 2; }
 result="$1"; shift
+# Jail the result path: this script rm's around it, so refuse anything
+# outside the plugin's own cache dir instead of trusting the caller.
+case "$result" in
+  "$HOME/.cache/sorakey/"*) ;;
+  *) echo "sorakey-detached: result file outside cache dir: $result" >&2; exit 2 ;;
+esac
+# Fail fast on a missing helper instead of reporting success for a picker
+# that never started (the launch below is async and always exits 0).
+cmd="$1"
+if [[ "$cmd" == */* ]]; then
+  [[ -x "$cmd" ]] || { echo "sorakey-detached: not executable: $cmd" >&2; exit 127; }
+else
+  command -v "$cmd" >/dev/null 2>&1 || { echo "sorakey-detached: command not found: $cmd" >&2; exit 127; }
+fi
 mkdir -p "$(dirname "$result")"
-rm -f "$result" "$result.pid"
-touch "$result.open"
+rm -f -- "$result" "$result.pid"
+touch -- "$result.open"
 # Bytecode quarantine: any python launched from the plugin dir would write
 # its __pycache__ INTO the watched plugin dir on first run — the shell sees
 # the write, reloads the plugin (bar blink), and the reload teardown
@@ -31,4 +46,9 @@ mkdir -p "$PYTHONPYCACHEPREFIX"
 # result log next to the result file, never to a pipe that can die.
 # $! (the picker's pid) is recorded so the service can tell a dead picker
 # from a still-open dialog instead of waiting out the full timeout.
+# One-generation rotation: the log would otherwise grow without bound
+# across hundreds of picker runs.
+if [[ -f "$result.log" ]] && [[ $(stat -c%s "$result.log" 2>/dev/null || echo 0) -gt 1048576 ]]; then
+  mv -f "$result.log" "$result.log.1" 2>/dev/null || true
+fi
 bash -c 'setsid "$@" </dev/null >>"$0.log" 2>&1 & echo $! >"$0.pid"' "$result" "$@"

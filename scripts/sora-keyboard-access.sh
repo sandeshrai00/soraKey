@@ -13,7 +13,7 @@
 #
 # Flags: --use-sudo  skip pkexec and use sudo directly (for terminal use,
 # where a TTY exists for the password prompt).
-set -u
+set -euo pipefail
 
 USE_SUDO=0
 if [[ "${1:-}" == "--use-sudo" ]]; then USE_SUDO=1; fi
@@ -55,6 +55,12 @@ run_privileged() {
   # embedded in shell text — quotes or spaces in the path can't escape.
   local root_cmd='install -m 644 "$1" "$2" && udevadm control --reload-rules && udevadm trigger --subsystem-match=input --action=change'
   local out=""
+  if [[ "$USE_SUDO" -eq 0 ]] && ! command -v pkexec >/dev/null 2>&1 && ! command -v sudo >/dev/null 2>&1; then
+    # Neither approval tool exists: distinct from a user dismissal, or the
+    # panel would offer Retry in an infinite loop.
+    printf '%s' "no privilege tool (pkexec/sudo) available" > "${PK_ERR_FILE:-/dev/null}" 2>/dev/null || true
+    return 1
+  fi
   if [[ "$USE_SUDO" -eq 0 ]] && command -v pkexec >/dev/null 2>&1; then
     out=$(pkexec bash -c "$root_cmd" _ "$SRC" "$DST" 2>&1) && return 0
     printf '%s' "$out" > "${PK_ERR_FILE:-/dev/null}" 2>/dev/null || true
@@ -75,7 +81,7 @@ map_priv_error() {
   low=$(printf '%s' "$err" | tr '[:upper:]' '[:lower:]')
   case "$low" in
     *dismiss*|*cancel*) return 2 ;;
-    *agent*|*authority*|*session*|*polkit*|*display*|*terminal*required*) return 3 ;;
+    *privilege?tool*|*agent*|*authority*|*session*|*polkit*|*display*|*terminal*required*) return 3 ;;
     *) return 1 ;;
   esac
 }
@@ -92,13 +98,19 @@ note "Keyboard permission needed for sounds."
 
 step "Approving (one time)"
 PK_ERR_FILE=$(mktemp)
+trap 'rm -f "$PK_ERR_FILE"' EXIT
 if ! run_privileged; then
   err=$(cat "$PK_ERR_FILE" 2>/dev/null)
   rm -f "$PK_ERR_FILE"
+  trap - EXIT
   code=2
   if [[ -n "$err" ]]; then
+    # map_priv_error returns nonzero by design (it IS the code); suspend
+    # errexit around it or set -e aborts before the assignment.
+    set +e
     map_priv_error "$err"
     code=$?
+    set -e
   fi
   if [[ "$code" -eq 3 ]]; then
     echo "sora-keyboard-access: no approval dialog on this system" >&2
@@ -114,7 +126,7 @@ rm -f "$PK_ERR_FILE"
 
 # udev applies access shortly — check briefly as the user.
 step "Checking"
-for _ in $(seq 1 10); do
+for ((i = 0; i < 10; i++)); do
   if user_can_read_keyboard; then
     note "Done. Type to hear sounds."
     exit 0

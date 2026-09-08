@@ -13,9 +13,9 @@ pub fn resample_interleaved(
     channels: u16,
     from_rate: u32,
     to_rate: u32,
-) -> Vec<f32> {
+) -> Result<Vec<f32>, String> {
     if from_rate == to_rate || samples.is_empty() {
-        return samples.to_vec();
+        return Ok(samples.to_vec());
     }
 
     let channels = channels.max(1) as usize;
@@ -34,19 +34,14 @@ pub fn resample_interleaved(
     // up-conversion (11025→48000 is 4.35x, 22050→48000 is 2.17x). The old
     // 2.0 cap made those fail into the silent wrong-rate fallback below
     // (input returned unconverted but tagged with the new rate).
-    let mut resampler = match SincFixedIn::<f32>::new(
+    let mut resampler = SincFixedIn::<f32>::new(
         (to_rate as f64) / (from_rate as f64),
         5.0,
         params,
         chunk_size,
         channels,
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            crate::always_eprint!("❌ Failed to create resampler: {}", e);
-            return samples.to_vec();
-        }
-    };
+    )
+    .map_err(|e| format!("Failed to create resampler: {}", e))?;
 
     // rubato's chunked `process()` already returns output that is correctly
     // time-aligned per call (verified empirically: an impulse at input frame
@@ -88,8 +83,7 @@ pub fn resample_interleaved(
                 }
             }
             Err(e) => {
-                crate::always_eprint!("❌ Resample chunk failed: {}", e);
-                break;
+                return Err(format!("Resample chunk failed: {}", e));
             }
         }
 
@@ -100,7 +94,7 @@ pub fn resample_interleaved(
     // count (truncating samples to a multiple of channels == truncating frames).
     out.truncate(expected_frame_count * channels);
 
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -121,7 +115,8 @@ mod tests {
             })
             .collect();
 
-        let resampled = resample_interleaved(&samples, 1, from_rate, to_rate);
+        let resampled = resample_interleaved(&samples, 1, from_rate, to_rate)
+            .expect("test resample must succeed");
 
         // Length must match the real (non-padded) input frame count scaled
         // by the rate ratio, exactly (within rounding) - not just "close to
@@ -155,7 +150,8 @@ mod tests {
             })
             .collect();
 
-        let resampled = resample_interleaved(&samples, 1, from_rate, to_rate);
+        let resampled = resample_interleaved(&samples, 1, from_rate, to_rate)
+            .expect("test resample must succeed");
 
         let expected_len =
             ((frame_count as f64) * (to_rate as f64) / (from_rate as f64)).round() as usize;
@@ -182,7 +178,8 @@ mod tests {
         let mut samples = vec![0.0f32; frame_count];
         samples[impulse_frame] = 1.0;
 
-        let resampled = resample_interleaved(&samples, 1, from_rate, to_rate);
+        let resampled = resample_interleaved(&samples, 1, from_rate, to_rate)
+            .expect("test resample must succeed");
 
         let expected_peak_frame =
             ((impulse_frame as f64) * (to_rate as f64) / (from_rate as f64)).round() as usize;
@@ -206,7 +203,8 @@ mod tests {
     #[test]
     fn resample_skips_when_rates_match() {
         let samples = vec![0.1, 0.2, 0.3, 0.4];
-        let resampled = resample_interleaved(&samples, 2, 44_100, 44_100);
+        let resampled = resample_interleaved(&samples, 2, 44_100, 44_100)
+            .expect("same-rate resample must succeed");
         assert_eq!(resampled, samples);
     }
 }

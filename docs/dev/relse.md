@@ -2,7 +2,8 @@
 
 Repo: github.com/sandeshrai00/soraKey
 Binaries built by CI: `sorakey-x86_64` + `sorakey-aarch64`
-(Rust 1.87, pinned in rust-toolchain.toml)
+(Rust 1.87, pinned in rust-toolchain.toml and mirrored in
+.github/workflows — CI's identity check fails the run if they disagree)
 
 ---
 
@@ -10,14 +11,17 @@ Binaries built by CI: `sorakey-x86_64` + `sorakey-aarch64`
 
 A release exists for ONE thing: shipping the compiled **daemon binary**.
 The installer (`scripts/sora-build.sh`) only downloads the GitHub
-prebuilt when **the tagged commit's daemon source == your current daemon
-source**. Otherwise every user compiles from source (slow, needs Rust).
+prebuilt when **the tagged commit's compiled inputs (`.rs`, `Cargo.toml`,
+`Cargo.lock`, `rust-toolchain.toml`) match your current source**.
+Soundpacks are data, not compiled in — pack-only changes never need a
+release. Otherwise every user compiles from source (slow, needs Rust).
 
 | What you changed | New release? |
 |---|---|
-| anything in `daemon/` (any `.rs`, `Cargo.toml`) | **YES — must release** |
+| any `.rs`, `Cargo.toml`, `Cargo.lock` under `daemon/` | **YES — must release** |
 | `rust-toolchain.toml` | **YES — must release** |
-| only `SoraWidget.qml`, `SoraService.qml`, `SoraKeyStore.js`, `Sora*.qml`, `SoraPackPicker.qml`, `scripts/*.py`, `scripts/*.sh`, README, docs | **NO** — plugin files ship from the repo; users get them with `omarchy plugin update` |
+| only `daemon/soundpacks/**` (pack data) | **NO** — data ships from the repo; the installer syncs it on next shell start |
+| only QML/JS (`SoraWidget.qml`, `SoraService.qml`, `SoraKeyStore.js`, `SoraPackPicker.qml`, `SoraDropdown.qml`, `SoraTextField.qml`), `scripts/*`, README, docs | **NO** — plugin files ship from the repo; users get them with `omarchy plugin update` |
 
 Three files must ALWAYS agree with each other: the git tag,
 `manifest.json:version`, and `daemon/Cargo.toml:version`.

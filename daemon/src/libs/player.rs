@@ -170,19 +170,32 @@ impl EngineState {
         let device_manager = DeviceManager::new();
         let config = crate::state::settings_saver::current();
 
-        let (stream, stream_handle, opened_device_id, device_rate) =
-            open_stream(&device_manager, config.selected_audio_device.as_deref()).unwrap_or_else(
-                |e| {
-                    crate::always_eprint!("❌ [AudioEngine] {} - falling back to default", e);
-                    open_stream(&device_manager, None).unwrap_or_else(|e2| {
-                crate::always_eprint!(
-                    "❌ [AudioEngine] no audio device available: {} - check configuration, exiting",
-                    e2
-                );
-                std::process::exit(1)
-            })
-                },
-            );
+        let (stream, stream_handle, opened_device_id, device_rate) = open_stream(
+            &device_manager,
+            config.selected_audio_device.as_deref(),
+        )
+        .unwrap_or_else(|e| {
+            crate::always_eprint!("❌ [AudioEngine] {} - falling back to default", e);
+            loop {
+                match open_stream(&device_manager, None) {
+                    Ok(t) => break t,
+                    Err(e2) => {
+                        // No audio device (yet): stay alive serving
+                        // input + ctl/status and retry instead of
+                        // killing the daemon (USB devices appear late).
+                        crate::always_eprint!(
+                            "❌ [AudioEngine] no audio device available: {} - retrying in 5s",
+                            e2
+                        );
+                        crate::state::status::set_audio_result(
+                            false,
+                            Some(format!("no audio device: {}", e2)),
+                        );
+                        std::thread::sleep(std::time::Duration::from_secs(5));
+                    }
+                }
+            }
+        });
         let current_device_id = opened_device_id;
         crate::state::status::set_audio_result(true, None);
 
@@ -566,11 +579,9 @@ fn handle_command(cmd_tx: &Sender<AudioCommand>, state: &mut EngineState, comman
                         // swap), so the swap itself is just a buffer handover.
                         state.pack = Some(pack);
                         state.key_sinks.clear();
-                        // The old pack's buffers just freed on this thread;
-                        // return the pages instead of pinning them as RSS.
-                        unsafe {
-                            libc::malloc_trim(0);
-                        }
+                        // Old pack buffers freed above; page return happens
+                        // in the load worker (pack_loader), not here — a
+                        // reclaim pause on this thread would glitch playback.
                     }
                     // else: keep the old pack playing.
                 }
@@ -626,7 +637,8 @@ fn handle_command(cmd_tx: &Sender<AudioCommand>, state: &mut EngineState, comman
 
 /// Recommended volume for a pack id, if its config declares a non-default one.
 fn recommended_volume_for_pack(id: &str) -> Option<f32> {
-    let path = crate::state::folders::soundpacks::config_json(id);
+    let dir = crate::state::folders::soundpacks::contained_dir(id)?;
+    let path = crate::state::folders::soundpacks::contained_file(&dir, "config.json")?;
     let content = std::fs::read_to_string(&path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&content).ok()?;
     v.get("options")?
@@ -644,6 +656,10 @@ fn first_available_pack() -> Option<String> {
         .flatten()
         .filter(|e| e.path().join("config.json").exists())
         .map(|e| e.file_name().to_string_lossy().to_string())
+        // Symlinked dirs escaping the root must not become the fallback.
+        .filter(|n| {
+            crate::state::folders::soundpacks::contained_dir(&format!("keyboard/{n}")).is_some()
+        })
         .collect();
     names.sort();
     names.into_iter().next().map(|n| format!("keyboard/{n}"))

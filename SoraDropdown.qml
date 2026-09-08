@@ -14,7 +14,7 @@ import qs.Ui
 //
 // Keyboard: Tab to focus the trigger, Enter/Space opens, Esc closes,
 // j/k or Up/Down walks options inside the open popup, Enter selects.
-// A sibling SearchableDropdown reuses the same visuals but adds an
+// A sibling SoraPackPicker reuses the same visuals but adds an
 // embedded filter input — keep the two separate so each stays simple.
 // Sorakey fork of Omarchy's shell Dropdown: identical except trigger,
 // popup background, and row highlights use a friendly radius floor
@@ -30,6 +30,7 @@ Item {
   property string label: ""
   property string value: ""
   property var options: []
+  property string emptyText: "No options"
 
   property color foreground: Color.popups.text
   property color background: Color.popups.background
@@ -178,10 +179,19 @@ Item {
           optionList.forceActiveFocus()
         }
 
+                Text {
+          textFormat: Text.PlainText
+          anchors.centerIn: parent
+          visible: root.options.length === 0
+          text: root.emptyText
+          color: Qt.darker(root.foreground, 1.6)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+        }
+
         contentItem: ListView {
           id: optionList
           spacing: root.roundedCorners ? Style.spacing.sm : Style.spacing.labelGap
-
           Keys.priority: Keys.BeforeItem
           Keys.onPressed: function(event) {
             if (event.key === Qt.Key_Escape) { popup.close(); event.accepted = true }

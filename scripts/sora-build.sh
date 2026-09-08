@@ -29,6 +29,7 @@ sync_soundpacks() {
   mkdir -p "$SHARE/soundpacks/keyboard"
   local updated=0 removed=0
   local stamp_tmp; stamp_tmp=$(mktemp)
+  trap 'rm -f "$stamp_tmp"' RETURN
   local src id dst
   for src in "$src_dir"/*/; do
     [[ -d "$src" ]] || continue
@@ -44,9 +45,13 @@ sync_soundpacks() {
   if [[ -f "$STAMP" ]]; then
     local old_id
     while read -r old_id _; do
-      [[ -n "$old_id" ]] || continue
+      # STAMP is machine-written, but a hand-edited/planted line must never
+      # steer an rm -rf: plain single-level dir names only.
+      case "$old_id" in
+        ""|*/*|*..*|-*) echo "soundpacks sync warning: skipping suspect stamp entry '$old_id'" >&2; continue ;;
+      esac
       if [[ ! -d "$src_dir/$old_id" ]] && [[ -d "$SHARE/soundpacks/keyboard/$old_id" ]]; then
-        rm -rf "$SHARE/soundpacks/keyboard/$old_id" && removed=$((removed + 1))
+        rm -rf -- "$SHARE/soundpacks/keyboard/$old_id" && removed=$((removed + 1))
       fi
     done < "$STAMP" || true
   fi
@@ -58,8 +63,15 @@ sync_soundpacks() {
   return 0
 }
 
-version="$(python3 -c "import json;print(json.load(open('$MANIFEST'))['version'])" 2>/dev/null || echo "0.0.0")"
-cargo_version="$(grep -m1 '^version' "$DAEMON_DIR/Cargo.toml" 2>/dev/null | sed 's/.*"\(.*\)"/\1/' || echo "")"
+if ! version="$(python3 -c "import json;print(json.load(open('$MANIFEST'))['version'])" 2>/dev/null)"; then
+  # A corrupt manifest used to hide as version 0.0.0 ("no prebuilt, building
+  # from source") with no diagnostic — say so, then keep the safe fallback.
+  echo "sora-build: cannot parse version from $MANIFEST — treating as 0.0.0 (no prebuilt will match)" >&2
+  version="0.0.0"
+fi
+# Strict TOML parse (same form as release.yml): the old grep matched any
+# first `version` line and broke on reorder, comments, or `version="x"`.
+cargo_version="$(python3 -c 'import tomllib,sys;print(tomllib.load(open(sys.argv[1],"rb"))["package"]["version"])' "$DAEMON_DIR/Cargo.toml" 2>/dev/null || echo "")"
 # manifest and daemon versions must agree: the release gate proves
 # tag == manifest, so a manifest/daemon mismatch means no release can
 # vouch for this source — build locally instead of trusting a prebuilt.
@@ -95,10 +107,15 @@ fi
 release_matches_source() {
   command -v git >/dev/null 2>&1 || return 1
   local dirty tag_commit
-  dirty=$(git -C "$PLUGIN_DIR" status --porcelain --untracked-files=normal -- daemon rust-toolchain.toml manifest.json ':!daemon/soundpacks' 2>/dev/null) || return 1
+  # manifest.json is deliberately NOT a gate path: only its `version` field
+  # matters for trust (download URL + versions_match + CI's tag==manifest
+  # check), so a description edit must not force a source build.
+  # Cargo.lock needs no explicit path either: it is tracked inside daemon/,
+  # so lock changes trip the diff below like any other source change.
+  dirty=$(git -C "$PLUGIN_DIR" status --porcelain --untracked-files=normal -- daemon rust-toolchain.toml ':!daemon/soundpacks' 2>/dev/null) || return 1
   [[ -z "$dirty" ]] || return 1
   tag_commit=$(git -C "$PLUGIN_DIR" rev-parse "refs/tags/v${version}^{commit}" 2>/dev/null) || return 1
-  git -C "$PLUGIN_DIR" diff --quiet "$tag_commit" HEAD -- daemon rust-toolchain.toml manifest.json ':!daemon/soundpacks' 2>/dev/null || return 1
+  git -C "$PLUGIN_DIR" diff --quiet "$tag_commit" HEAD -- daemon rust-toolchain.toml ':!daemon/soundpacks' 2>/dev/null || return 1
 }
 
 # gh can verify only when authenticated
@@ -122,8 +139,13 @@ try_download_prebuilt() {
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' RETURN
   echo "Trying verified prebuilt $url ..."
-  if curl --proto '=https' --tlsv1.2 -fsSL --max-time 120 -o "$tmp/$asset" "$url" 2>/dev/null \
-    && curl --proto '=https' --tlsv1.2 -fsSL --max-time 30 -o "$tmp/SHA256SUMS" "$sums" 2>/dev/null; then
+  # Capture HTTP codes (curl -w prints even on -f failure) so the failure
+  # says which it was: dead network, missing release, or missing checksums.
+  # -f still rejects error bodies; the codes below only route the message.
+  local asset_code sums_code
+  asset_code=$(curl --proto '=https' --tlsv1.2 -fsSL --max-time 120 -o "$tmp/$asset" "$url" -w '%{http_code}' 2>/dev/null) || true
+  sums_code=$(curl --proto '=https' --tlsv1.2 -fsSL --max-time 30 -o "$tmp/SHA256SUMS" "$sums" -w '%{http_code}' 2>/dev/null) || true
+  if [[ "$asset_code" == "200" && "$sums_code" == "200" ]]; then
     # normalize SHA256SUMS, then verify ONLY the downloaded asset.
     # (The file lists every arch; sha256sum -c over the whole file fails
     # on the binaries we didn't download, rejecting a good prebuilt.)
@@ -132,9 +154,12 @@ try_download_prebuilt() {
     actual=$(sha256sum "$tmp/$asset" 2>/dev/null | awk '{print $1}')
     if [[ -n "$expected" && "$expected" == "$actual" ]]; then
       if gh_can_verify; then
-        if GH_PROMPT_DISABLED=1 gh attestation verify "$tmp/$asset" --repo "$REPO" \
+        # Exit code stays the signal (output wording is not a contract);
+        # the captured text only explains the warning below.
+        att_out=$(GH_PROMPT_DISABLED=1 gh attestation verify "$tmp/$asset" --repo "$REPO" \
              --cert-identity-regex "https://github.com/$REPO/.github/workflows/release.*" \
-             --deny-self-hosted-runners 2>/dev/null; then
+             --deny-self-hosted-runners 2>&1) && att_rc=0 || att_rc=$?
+        if (( att_rc == 0 )); then
           install -m 755 "$tmp/$asset" "$BIN" || return 1
           [[ -n "$source_id" ]] && echo "$source_id" > "$LIB_DIR/source.sha256"
           rm -rf "$tmp"
@@ -142,7 +167,7 @@ try_download_prebuilt() {
           return 0
         fi
         # attestation failed — fall back to source build
-        echo "warning: attestation failed — building from source" >&2
+        echo "warning: attestation failed (${att_out:0:200}) — building from source" >&2
         rm -rf "$tmp"
         return 1
       fi
@@ -153,6 +178,14 @@ try_download_prebuilt() {
       echo "Installed prebuilt $version $arch (release checksum verified; attestation skipped — gh not logged in, run 'gh auth login' for the attested path)"
       return 0
     fi
+    echo "prebuilt checksum mismatch for $asset (expected $expected, got $actual) — building from source" >&2
+  else
+    case "$asset_code" in
+      000) echo "prebuilt download failed: no network / DNS / TLS route to github.com" >&2 ;;
+      404) echo "prebuilt download failed: no v${version} release assets (release missing?)" >&2 ;;
+      200) echo "prebuilt download failed: binary ok but checksum file missing (HTTP $sums_code)" >&2 ;;
+      *) echo "prebuilt download failed: HTTP $asset_code" >&2 ;;
+    esac
   fi
   rm -rf "$tmp" 2>/dev/null || true
   return 1
@@ -176,7 +209,7 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 # build outside plugin dir
-export SOURCE_DATE_EPOCH=$(git -C "$PLUGIN_DIR" log -1 --format=%ct 2>/dev/null || date +%s)
+export SOURCE_DATE_EPOCH="$(git -C "$PLUGIN_DIR" log -1 --format=%ct 2>/dev/null || date +%s)"
 export CARGO_INCREMENTAL=0
 export CARGO_TERM_QUIET=true
 cargo build --locked --release --manifest-path "$DAEMON_DIR/Cargo.toml" --target-dir "$TARGET_DIR"

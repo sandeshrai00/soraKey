@@ -59,10 +59,20 @@ fi
 
 if [[ $NO_RESTART -eq 0 ]]; then
   if command -v omarchy >/dev/null 2>&1; then
-    omarchy restart shell 2>/dev/null || omarchy restart --shell 2>/dev/null || echo "restart shell manually: omarchy restart shell"
-    sleep 1
+    if omarchy restart shell 2>/dev/null || omarchy restart --shell 2>/dev/null; then
+      sleep 1
+    else
+      echo "dev-sync: shell restart failed — run manually: omarchy restart shell" >&2
+      exit 1
+    fi
   fi
 fi
 
-# health check
-systemctl --user is-active sorakey >/dev/null 2>&1 && echo "sorakey: active" || echo "sorakey: inactive (enable plugin or check journalctl --user -u sorakey)"
+# health check doubles as the exit code: a dead service after a sync is a
+# failed sync, not a successful one with a footnote.
+if systemctl --user is-active sorakey >/dev/null 2>&1; then
+  echo "sorakey: active"
+else
+  echo "sorakey: inactive (enable plugin or check journalctl --user -u sorakey)" >&2
+  exit 1
+fi

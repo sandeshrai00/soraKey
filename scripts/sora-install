@@ -23,7 +23,9 @@ step "Building sorakey (verified prebuilt if available, else source)"
 # 2. Install soundpacks
 step "Installing soundpacks"
 mkdir -p "$SHARE/soundpacks"
-cp -rn "$DAEMON_DIR/soundpacks/." "$SHARE/soundpacks/" 2>/dev/null || true
+# -n never clobbers user/imported packs; failures here must be loud —
+# a silent partial copy used to install a daemon with missing audio.
+cp -rn "$DAEMON_DIR/soundpacks/." "$SHARE/soundpacks/" || die "soundpack copy failed (disk full or permissions on $SHARE/soundpacks)"
 # verify at least one usable pack (empty pack dir = silent daemon)
 if ! find "$SHARE/soundpacks/keyboard" -maxdepth 2 -name config.json -print -quit 2>/dev/null | grep -q .; then
   die "no soundpacks with config.json under $SHARE/soundpacks/keyboard"

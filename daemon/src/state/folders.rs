@@ -6,8 +6,10 @@ use std::sync::OnceLock;
 fn data_dir() -> PathBuf {
     match directories::BaseDirs::new() {
         Some(b) => b.data_dir().join("sorakey"),
-        None => PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
-            .join(".local/share/sorakey"),
+        // No HOME (service sandbox without env): the old "." fallback put
+        // the socket, lock and configs in whatever the CWD happened to be —
+        // possibly shared — so use the sticky-bit temp dir instead.
+        None => std::env::temp_dir().join("sorakey"),
     }
 }
 
@@ -75,5 +77,33 @@ pub mod soundpacks {
             .join("config.json")
             .to_string_lossy()
             .to_string()
+    }
+
+    /// Canonicalized pack directory, or `None` when it escapes the
+    /// soundpacks root (symlink attack) or doesn't exist. Fail closed:
+    /// callers deny the load, mirroring `delete_pack`.
+    pub fn contained_dir(soundpack_id: &str) -> Option<PathBuf> {
+        let base = get_builtin_soundpacks_dir();
+        let canon_base = base.canonicalize().ok()?;
+        let canon = Path::new(&soundpack_dir(soundpack_id))
+            .canonicalize()
+            .ok()?;
+        canon.starts_with(&canon_base).then_some(canon)
+    }
+
+    /// Canonicalized file path guaranteed under an already-contained `dir`,
+    /// or `None` for absolute/parent-traversal names and symlink escapes.
+    pub fn contained_file(dir: &Path, rel: &str) -> Option<PathBuf> {
+        let clean = rel.trim_start_matches("./").replace('\\', "/");
+        if clean.is_empty()
+            || clean.contains("..")
+            || clean.contains('\0')
+            || clean.starts_with('/')
+        {
+            return None;
+        }
+        let canon_dir = dir.canonicalize().ok()?;
+        let canon = canon_dir.join(&clean).canonicalize().ok()?;
+        canon.starts_with(&canon_dir).then_some(canon)
     }
 }

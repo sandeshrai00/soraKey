@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 pub fn socket_path() -> PathBuf {
     match std::env::var("XDG_RUNTIME_DIR") {
         Ok(dir) => PathBuf::from(dir).join("sorakey.sock"),
-        Err(_) => PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
+        Err(_) => std::env::temp_dir()
+            .join("sorakey.sock")
             .join(".sorakey.sock"),
     }
 }
@@ -298,7 +299,8 @@ fn toggle_mute(engine: &AudioEngineHandle) -> String {
 }
 
 fn recommended_volume_for(id: &str) -> Option<f32> {
-    let path = folders::soundpacks::config_json(id);
+    let dir = folders::soundpacks::contained_dir(id)?;
+    let path = folders::soundpacks::contained_file(&dir, "config.json")?;
     let content = std::fs::read_to_string(&path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&content).ok()?;
     v.get("options")?
@@ -317,12 +319,17 @@ fn load_pack(req: &serde_json::Value, engine: &AudioEngineHandle) -> String {
     }
     let id = qualify_soundpack_id(&raw, "keyboard/");
     // Verify the pack exists (directory + readable config) before claiming ok.
+    // contained_dir fails closed on symlink escapes, like delete_pack.
     {
-        let dir_s = folders::soundpacks::soundpack_dir(&id);
-        let cfg_s = folders::soundpacks::config_json(&id);
-        let dir = Path::new(&dir_s);
-        let cfg = Path::new(&cfg_s);
-        if !dir.is_dir() || std::fs::read_to_string(cfg).is_err() {
+        let dir = match folders::soundpacks::contained_dir(&id) {
+            Some(d) => d,
+            None => return fail("invalid path"),
+        };
+        let cfg = match folders::soundpacks::contained_file(&dir, "config.json") {
+            Some(c) => c,
+            None => return fail("invalid path"),
+        };
+        if !dir.is_dir() || std::fs::read_to_string(&cfg).is_err() {
             return fail("pack not found");
         }
     }
@@ -638,7 +645,8 @@ fn export_logs() -> String {
 }
 
 fn get_bar_section() -> String {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    let home = std::env::var("HOME")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().to_string());
     let path = std::path::PathBuf::from(&home).join(".local/share/sorakey/bar-section");
     if let Ok(s) = std::fs::read_to_string(&path) {
         ok(serde_json::json!({ "section": s.trim() }))
@@ -654,7 +662,8 @@ fn set_bar_section(req: &serde_json::Value) -> String {
     if !matches!(section, "left" | "center" | "right") {
         return fail("invalid section");
     };
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    let home = std::env::var("HOME")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().to_string());
     let dir = std::path::PathBuf::from(home).join(".local/share/sorakey");
     if let Err(e) = std::fs::create_dir_all(&dir) {
         return fail(&format!("could not create dir: {e}"));

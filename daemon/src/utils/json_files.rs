@@ -27,15 +27,18 @@ where
     let contents = serde_json::to_string_pretty(data)
         .map_err(|e| format!("Failed to serialize data: {}", e))?;
 
-    // pid in name avoids clashing with another instance
-    let temp_path = {
-        let mut name = file_path.as_os_str().to_os_string();
-        name.push(format!(".{}.tmp", std::process::id()));
-        std::path::PathBuf::from(name)
-    };
-
-    fs::write(&temp_path, contents)
-        .map_err(|e| format!("Failed to write file '{}': {}", temp_path.display(), e))?;
+    // Exclusive, owner-only temp: no pid-guessable name, no symlink follow.
+    let (temp_path, mut temp_file) = super::files::create_sibling_temp(file_path)?;
+    use std::io::Write;
+    temp_file.write_all(contents.as_bytes()).map_err(|e| {
+        let _ = fs::remove_file(&temp_path);
+        format!("Failed to write file '{}': {}", temp_path.display(), e)
+    })?;
+    temp_file.sync_all().map_err(|e| {
+        let _ = fs::remove_file(&temp_path);
+        format!("Failed to sync file '{}': {}", temp_path.display(), e)
+    })?;
+    drop(temp_file);
 
     fs::rename(&temp_path, file_path).map_err(|e| {
         // clean up temp on failure

@@ -58,8 +58,8 @@ fn acquire_lock() -> Option<std::fs::File> {
     let path = std::env::var("XDG_RUNTIME_DIR")
         .map(|dir| std::path::PathBuf::from(dir).join("sorakey.lock"))
         .unwrap_or_else(|_| {
-            std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
-                .join(".sorakey.lock")
+            // Same reasoning as folders::data_dir: never lock in CWD.
+            std::env::temp_dir().join("sorakey.lock")
         });
     let file = std::fs::OpenOptions::new()
         .create(true)

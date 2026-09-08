@@ -7,6 +7,9 @@ use std::fs;
 /// pack. V1→V2 conversion lives in the pack-load path (soundpack_loader), not
 /// here: a scan that mutates user files is how B5 destroyed multi packs.
 pub fn load_soundpack_metadata(soundpack_id: &str) -> Result<SoundpackMetadata, String> {
+    // Refuse symlink escapes before reading anything (scanner-visible error).
+    folders::soundpacks::contained_dir(soundpack_id)
+        .ok_or_else(|| format!("Soundpack escapes soundpacks dir: {}", soundpack_id))?;
     let config_path = folders::soundpacks::config_json(soundpack_id);
 
     // Validate the soundpack configuration first

@@ -1,4 +1,15 @@
-# Sorakey Full Audit — 2026-09-04
+# Sorakey Full Audit — 2026-09-04 — HISTORICAL, DO NOT FOLLOW BLINDLY
+
+> FROZEN AUDIT. The codebase has since been renamed (`Panel.qml` →
+> `SoraWidget.qml`, `Service.qml` → `SoraService.qml`, `Model.js` →
+> `SoraKeyStore.js`, `SearchablePackDropdown.qml` → `SoraPackPicker.qml`,
+> `build-sorakey.sh` → `sora-build.sh`, 25 daemon files renamed), the 10
+> sankey packs were replaced by 6 new packs, and `release.yml` now runs
+> `cargo test` + clippy + fmt with pinned actions and attestation.
+> Consequences: every `Panel.qml:`/`Service.qml:` line number below is
+> unresolvable, the `release.yml never tests` claims are false, and any
+> fix proposed here must be re-verified against current code first.
+> Kept for archaeology only.
 
 Full audit done — every file read end-to-end (Panel.qml all 1,499 lines,
 all QML forks, Service, Model, scripts, udev rule, docs, README, CI),

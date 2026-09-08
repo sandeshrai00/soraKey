@@ -30,6 +30,25 @@ fn json_num(value: f64) -> Value {
     )
 }
 
+/// Filenames arriving from pack configs (V1 `defines`, `sound`) must be
+/// plain single-level names. Anything else is rejected before it ever
+/// joins a directory: `..`, separators, absolute paths and NULs would
+/// otherwise read/write outside the pack on load and conversion.
+fn sanitize_pack_filename(name: &str) -> Option<&str> {
+    if name.is_empty()
+        || name == "null"
+        || name.contains('\0')
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains("..")
+        || name.starts_with('.')
+        || Path::new(name).is_absolute()
+    {
+        return None;
+    }
+    Some(name)
+}
+
 /// Convert V1 config to V2.
 pub fn convert_v1_to_v2(
     v1_config_path: &str,
@@ -109,12 +128,16 @@ pub fn convert_v1_to_v2(
             for key in sorted_keys {
                 if let Some(value) = defines.get(key) {
                     if let Some(filename) = value.as_str() {
-                        if !filename.is_empty()
-                            && filename != "null"
+                        if sanitize_pack_filename(filename).is_some()
                             && !seen_files.contains(filename)
                         {
                             audio_files_ordered.push(filename.to_string());
                             seen_files.insert(filename.to_string());
+                        } else {
+                            crate::always_eprint!(
+                                "⚠️  Ignoring unsafe V1 audio filename '{}', skipping",
+                                filename
+                            );
                         }
                     }
                 }
@@ -149,6 +172,9 @@ pub fn convert_v1_to_v2(
                     "🎵 Using main audio file from V1 single method: {}",
                     sound_str
                 );
+                if sanitize_pack_filename(sound_str).is_none() {
+                    return Err("Unsafe sound field in V1 config".into());
+                }
                 sound_str.to_string()
             } else {
                 return Err("Invalid sound field in V1 config".into());
@@ -389,9 +415,19 @@ pub fn convert_v1_to_v2(
 /// rename) so a crash mid-conversion never leaves a truncated config behind.
 /// Same-directory temp keeps the rename on one filesystem (truly atomic).
 fn write_atomic_string(path: &str, contents: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = format!("{}.tmp.{}", path, std::process::id());
-    std::fs::write(&tmp, contents)?;
-    if let Err(e) = std::fs::rename(&tmp, path) {
+    use std::io::Write;
+    let target = Path::new(path);
+    let (tmp, mut file) = super::files::create_sibling_temp(target)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    if let Err(e) = file
+        .write_all(contents.as_bytes())
+        .and_then(|()| file.sync_all())
+    {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
+    drop(file);
+    if let Err(e) = std::fs::rename(&tmp, target) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e.into());
     }
@@ -425,6 +461,20 @@ pub fn back_up_existing_file(path: &Path) -> Result<Option<PathBuf>, String> {
             ));
         }
     }
+
+    // Exclusively reserve the backup path first: `copy` truncates through
+    // a planted symlink, so a pre-existing link must fail here instead.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+        .map_err(|e| {
+            format!(
+                "refusing to back up over existing path {}: {}",
+                target.display(),
+                e
+            )
+        })?;
 
     std::fs::copy(path, &target).map_err(|e| {
         format!(
@@ -460,6 +510,10 @@ fn concatenate_audio_files_with_timing(
     let mut timing_info = std::collections::HashMap::new();
 
     for (i, filename) in audio_files.iter().enumerate() {
+        if sanitize_pack_filename(filename).is_none() {
+            crate::always_print!("   ⚠️ Unsafe audio filename, skipping: {}", filename);
+            continue;
+        }
         let file_path = format!("{}/{}", soundpack_dir, filename);
         crate::always_print!(
             "   📁 Loading audio file {}/{}: {}",
@@ -504,6 +558,7 @@ fn concatenate_audio_files_with_timing(
                             channels,
                             sample_rate,
                         )
+                        .map_err(|e| format!("resample failed: {}", e))?
                     } else {
                         samples
                     };
@@ -602,15 +657,15 @@ fn convert_audio_format(
     from_sample_rate: u32,
     to_channels: u16,
     to_sample_rate: u32,
-) -> Vec<f32> {
+) -> Result<Vec<f32>, String> {
     if from_channels == to_channels && from_sample_rate == to_sample_rate {
-        return samples.to_vec();
+        return Ok(samples.to_vec());
     }
 
     let channel_converted = convert_channels(samples, from_channels, to_channels);
 
     if from_sample_rate == to_sample_rate {
-        return channel_converted;
+        return Ok(channel_converted);
     }
 
     crate::libs::sound_quality::resample_interleaved(
@@ -678,9 +733,12 @@ fn save_audio_file(
         sample_format: hound::SampleFormat::Int,
     };
 
-    let tmp_path = format!("{}.tmp.{}", output_path, std::process::id());
+    // Securely-created sibling temp (O_EXCL, 0600): hound's `create` would
+    // truncate through a planted symlink, so hand it an already-open file.
+    let (tmp_path, tmp_file) = super::files::create_sibling_temp(Path::new(output_path))
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     {
-        let mut writer = hound::WavWriter::create(&tmp_path, spec)?;
+        let mut writer = hound::WavWriter::new(tmp_file, spec)?;
 
         for &sample in samples {
             let sample_i16 = (sample * (i16::MAX as f32)) as i16;
@@ -1033,7 +1091,8 @@ mod tests {
         let frames_at_22050 = 2205; // 100ms
         let samples = vec![0.0f32; frames_at_22050];
 
-        let converted = convert_audio_format(&samples, 1, 22_050, 1, 44_100);
+        let converted = convert_audio_format(&samples, 1, 22_050, 1, 44_100)
+            .expect("test conversion must succeed");
 
         let expected = 4410; // the same 100ms at 44100Hz
         let diff = (converted.len() as i64 - expected).unsigned_abs() as usize;
@@ -1053,7 +1112,8 @@ mod tests {
         let frames_at_22050 = 2205; // 100ms mono
         let samples = vec![0.25f32; frames_at_22050];
 
-        let converted = convert_audio_format(&samples, 1, 22_050, 2, 44_100);
+        let converted = convert_audio_format(&samples, 1, 22_050, 2, 44_100)
+            .expect("test conversion must succeed");
 
         let frames = converted.len() / 2;
         let expected_frames = 4410;

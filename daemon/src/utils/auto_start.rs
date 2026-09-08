@@ -1,5 +1,11 @@
 use std::process::Command;
 
+/// Absolute binary paths: these run at every daemon start, and a bare
+/// `Command::new("systemctl")` would execute whatever `PATH` resolves to.
+/// Missing binaries (non-systemd boxes) skip gracefully with None.
+const TIMEOUT_BIN: &str = "/usr/bin/timeout";
+const SYSTEMCTL_BIN: &str = "/usr/bin/systemctl";
+
 /// Current auto-startup state, or None when it cannot be determined.
 ///
 /// Runs `systemctl --user is-enabled sorakey` under the `timeout` binary so
@@ -9,7 +15,7 @@ use std::process::Command;
 /// user's existing value rather than forcing true -> false.
 pub fn get_auto_startup_state() -> Option<bool> {
     // `timeout` present? Skip gracefully when it is not.
-    let timeout_ok = Command::new("timeout")
+    let timeout_ok = Command::new(TIMEOUT_BIN)
         .arg("--version")
         .output()
         .map(|o| o.status.success())
@@ -18,8 +24,8 @@ pub fn get_auto_startup_state() -> Option<bool> {
         return None;
     }
 
-    let out = Command::new("timeout")
-        .args(["5", "systemctl", "--user", "is-enabled", "sorakey"])
+    let out = Command::new(TIMEOUT_BIN)
+        .args(["5", SYSTEMCTL_BIN, "--user", "is-enabled", "sorakey"])
         .output()
         .ok()?;
     // 124 = `timeout` killed the child: state unknown.

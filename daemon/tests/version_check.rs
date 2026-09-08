@@ -14,10 +14,18 @@ fn manifest_and_cargo_versions_match() {
 
     let cargo_toml = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
         .expect("read Cargo.toml");
+    // Strict-ish parse without a TOML dependency: `version` key, optional
+    // spacing, `=`, quoted value. Same strictness as the release workflow
+    // and sora-build.sh tomllib reads (no bare-substring matching).
     let cargo_version = cargo_toml
         .lines()
-        .find_map(|line| line.strip_prefix("version = "))
-        .map(|v| v.trim_matches('"'))
+        .map(str::trim)
+        .find_map(|line| {
+            let rest = line.strip_prefix("version")?;
+            let rest = rest.trim_start().strip_prefix('=')?;
+            let v = rest.trim().trim_matches('"');
+            (!v.is_empty()).then_some(v.to_string())
+        })
         .expect("Cargo.toml has a version line");
 
     assert_eq!(

@@ -8,19 +8,20 @@ import qs.Commons
 import "SoraKeyStore.js" as Model
 
 // Sorakey panel — status, mute/volume, soundpacks, install controls.
-// Polls `sorakey ctl status` every second (open or closed); ctl/systemctl are one-shot.
+// Polls `sorakey ctl status` (every second when open, 10s when closed); ctl/systemctl are one-shot.
 Panel {
   id: root
-  moduleName: "io.github.sandeshrai00.sorakey"
-  ipcTarget: "io.github.sandeshrai00.sorakey"
+  readonly property string pluginId: "io.github.sandeshrai00.sorakey"
+  moduleName: root.pluginId
+  ipcTarget: root.pluginId
 
   readonly property string home: Quickshell.env("HOME")
   readonly property string sorakeyBin: home + "/.local/bin/sorakey"
-  readonly property string pluginDir: home + "/.config/omarchy/plugins/io.github.sandeshrai00.sorakey"
+  readonly property string pluginDir: home + "/.config/omarchy/plugins/" + root.pluginId
   readonly property string setupPath: pluginDir + "/scripts/sora-install"
 
   // shell-managed service — survives panel rebuilds
-  readonly property var service: bar?.shell?.firstPartyServiceFor("io.github.sandeshrai00.sorakey")
+  readonly property var service: bar?.shell?.firstPartyServiceFor(root.pluginId)
   readonly property string pluginVersion: service && service.manifest && service.manifest.version ? String(service.manifest.version) : ""
   property string pluginCommit: ""
 
@@ -88,7 +89,6 @@ Panel {
   property var keyboardPacks: []
   property real perPackVolume: 100
   // daemon health (explains "running but silent")
-  property int inputKeyboards: 0
   property string inputError: ""
   // first-reading tri-state: until `sorakey ctl status` answers once (or
   // conclusively fails), we know nothing — neither the main controls nor
@@ -104,8 +104,6 @@ Panel {
   property int clearStreak: 0
   property var packLoaded: null
   property string packError: ""
-  property var lastKeyAgeS: null
-  property bool audioOk: true
   property string audioError: ""
   // one-tap keyboard-access enable flow (panel button → script → GUI approval)
   property bool captureBusy: false
@@ -117,12 +115,14 @@ Panel {
   // single persistent result slot: every result feed mirrors here, so the
   // panel shows the latest outcome until the next one (no auto-clear)
   property string lastResult: ""
-  onImportStatusChanged: if (root.importStatus !== "") root.lastResult = String(root.importStatus).slice(0, 500)
-  onExportStatusChanged: if (root.exportStatus !== "") root.lastResult = String(root.exportStatus).slice(0, 500)
-  onSyncStatusChanged: if (root.syncStatus !== "") root.lastResult = String(root.syncStatus).slice(0, 500)
-  onErrorToastChanged: if (root.errorToast !== "") root.lastResult = String(root.errorToast).slice(0, 500)
-  onUpdateStatusChanged: if (root.updateStatus !== "") root.lastResult = String(root.updateStatus).slice(0, 500)
-  onCaptureStatusChanged: if (root.captureStatus !== "") root.lastResult = String(root.captureStatus).slice(0, 500)
+  // single truncation point for every user-visible result/error string
+  function shortText(s) { return String(s || "").slice(0, 500) }
+  onImportStatusChanged: if (root.importStatus !== "") root.lastResult = root.shortText(root.importStatus)
+  onExportStatusChanged: if (root.exportStatus !== "") root.lastResult = root.shortText(root.exportStatus)
+  onSyncStatusChanged: if (root.syncStatus !== "") root.lastResult = root.shortText(root.syncStatus)
+  onErrorToastChanged: if (root.errorToast !== "") root.lastResult = root.shortText(root.errorToast)
+  onUpdateStatusChanged: if (root.updateStatus !== "") root.lastResult = root.shortText(root.updateStatus)
+  onCaptureStatusChanged: if (root.captureStatus !== "") root.lastResult = root.shortText(root.captureStatus)
   property string pendingCtlCmd: ""
   property var audioDevices: []
   property string audioDeviceSelected: ""
@@ -186,6 +186,10 @@ Panel {
         root.terminalBusy = false
         root.capturePhase = ""
         capturePhaseTimer.stop()
+        // No success signal arrived: the terminal never opened (missing
+        // TERMINAL?) or the script never ran — say so, don't just go quiet.
+        root.errorToast = "Terminal did not respond — check a terminal is installed."
+        clearErrorToast.restart()
       }
     }
   }
@@ -324,26 +328,28 @@ Panel {
 
   function startDaemon() {
     if (stopFlagProc.running) return
-    // argv, no shell: spaces or quotes in $HOME can't break this
+    // argv, no shell: spaces or quotes in $HOME can't break this.
+    // The service action waits for the flag write (stopFlagProc.onExited):
+    // firing systemctl first would race it and resurrect a stopped daemon.
+    root.pendingSvcAction = ["start", "sorakey"]
     stopFlagProc.command = ["rm", "-f", root.home + "/.local/share/sorakey/stopped"]
     stopFlagProc.running = true
-    root.runService(["start", "sorakey"])
   }
   function stopDaemon() {
     // sticky stop — Service must not auto-restart what the user stopped.
     // The path travels as $1, never inside shell text.
     if (stopFlagProc.running) return
+    root.pendingSvcAction = ["stop", "sorakey"]
     stopFlagProc.command = ["/usr/bin/bash", "-c", 'mkdir -p "$1" && printf stopped > "$1/stopped"', "_", root.home + "/.local/share/sorakey"]
     stopFlagProc.running = true
-    root.runService(["stop", "sorakey"])
   }
   function restartDaemon() {
     if (stopFlagProc.running) return
+    root.pendingSvcAction = ["restart", "sorakey"]
     stopFlagProc.command = ["rm", "-f", root.home + "/.local/share/sorakey/stopped"]
     stopFlagProc.running = true
-    root.runService(["restart", "sorakey"])
   }
-  function doUpdate() { if (root.updateBusy) return; root.updateBusy=true; root.updateStatus="Updating…"; updateProc.command=["omarchy","plugin","update","io.github.sandeshrai00.sorakey","--yes"]; updateProc.running=true }
+  function doUpdate() { if (root.updateBusy) return; root.updateBusy=true; root.updateStatus="Updating…"; updateProc.command=["omarchy","plugin","update",root.pluginId,"--yes"]; updateProc.running=true }
 
   function install() {
     if (setupBusy) return
@@ -364,7 +370,7 @@ Panel {
     var cfg = root.bar && root.bar.shell ? root.bar.shell.shellConfig : null
     var layout = cfg && cfg.bar && cfg.bar.layout ? cfg.bar.layout : null
     if (!layout) return "right"
-    var id = "io.github.sandeshrai00.sorakey"
+    var id = root.pluginId
     for (var s of ["left","center","right"]) {
       var arr = layout[s]
       if (!Array.isArray(arr)) continue
@@ -375,11 +381,29 @@ Panel {
 
   function moveToSection(section) {
     if (["left","center","right"].indexOf(section)===-1) return
-    Quickshell.execDetached(["omarchy","plugin","enable","io.github.sandeshrai00.sorakey","--section",section])
+    // Verifiable move: execDetached can't report failure, so a Process runs
+    // the enable and toasts when the bar icon refuses to move.
+    if (!moveProc.running) {
+      moveProc.command = ["omarchy","plugin","enable",root.pluginId,"--section",section]
+      moveProc.running = true
+    }
     // save choice — Omarchy resets to right on re-enable
     if (!sectionWrite.running) {
       sectionWrite.command = [root.sorakeyBin, "ctl", "{\"cmd\":\"set_bar_section\",\"section\":\"" + section + "\"}"]
       sectionWrite.running = true
+    }
+  }
+
+  Process {
+    id: moveProc
+    stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        var detail = String(stderr.text || "").trim().split("\n").pop()
+        root.errorToast = "Could not move bar icon" + (detail !== "" ? ": " + detail : ".")
+        clearErrorToast.restart()
+      }
     }
   }
 
@@ -389,6 +413,9 @@ Panel {
     command: [root.sorakeyBin, "ctl", "{\"cmd\":\"get_bar_section\"}"]
     stdout: StdioCollector { waitForEnd: true }
     onExited: function(exitCode) {
+      // A failed read (daemon down, corrupt output) keeps the current
+      // section: never navigate on garbage.
+      if (exitCode !== 0) return
       try {
         var resp = JSON.parse(String(stdout.text || "").trim())
         if (resp.ok && resp.section && resp.section !== root.currentBarSection)
@@ -401,6 +428,12 @@ Panel {
     id: sectionWrite
     stdout: StdioCollector { waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.errorToast = "Could not save bar position."
+        clearErrorToast.restart()
+      }
+    }
   }
 
   // restore saved hero theme toggle ("1"/"0", legacy "theme"/"default")
@@ -409,6 +442,7 @@ Panel {
     command: ["cat", root.logoModeFile]
     stdout: StdioCollector { waitForEnd: true }
     onExited: function(exitCode) {
+      if (exitCode !== 0) return
       var mode = String(stdout.text || "").trim()
       if (mode === "1" || mode === "theme") root.heroMatchTheme = true
       else if (mode === "0" || mode === "default") root.heroMatchTheme = false
@@ -419,6 +453,12 @@ Panel {
     id: logoWrite
     stdout: StdioCollector { waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.errorToast = "Could not save theme choice."
+        clearErrorToast.restart()
+      }
+    }
   }
 
   function setHeroMatchTheme(on) {
@@ -435,6 +475,7 @@ Panel {
     command: ["cat", root.roundedModeFile]
     stdout: StdioCollector { waitForEnd: true }
     onExited: function(exitCode) {
+      if (exitCode !== 0) return
       var mode = String(stdout.text || "").trim()
       if (mode === "0") root.roundedCorners = false
       else if (mode === "1") root.roundedCorners = true
@@ -445,6 +486,12 @@ Panel {
     id: roundedWrite
     stdout: StdioCollector { waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        root.errorToast = "Could not save corner choice."
+        clearErrorToast.restart()
+      }
+    }
   }
 
   function setRoundedCorners(on) {
@@ -471,7 +518,7 @@ Panel {
     onExited: function(exitCode) {
       root.updateBusy = false
       var err = String(stderr.text || "").trim()
-      if (exitCode === 0) root.updateStatus = String(stdout.text || "").trim().split("\n").pop().replace("io.github.sandeshrai00.sorakey", "Sorakey")
+      if (exitCode === 0) root.updateStatus = String(stdout.text || "").trim().split("\n").pop().replace(root.pluginId, "Sorakey")
       else root.updateStatus = err !== "" ? err : "Update failed."
       clearUpdateTimer.restart()
     }
@@ -507,12 +554,12 @@ Panel {
     root.uninstallBusy = false
     if (ok) {
       root.uninstallArmed = false
-      Quickshell.execDetached(["omarchy", "plugin", "remove", "io.github.sandeshrai00.sorakey", "--yes"])
+      Quickshell.execDetached(["omarchy", "plugin", "remove", root.pluginId, "--yes"])
       root.installed = false
       root.running = false
     } else {
       root.uninstallArmed = false
-      root.errorToast = String(err || "Uninstall failed.").slice(0, 500)
+      root.errorToast = root.shortText(err || "Uninstall failed.")
       clearErrorToast.restart()
     }
   }
@@ -540,7 +587,6 @@ Panel {
       var pack = String(o.keyboard_pack || "")
       if (root.keyboardPack !== pack) root.keyboardPack = pack
       // health fields (absent on older daemons → keep previous value)
-      if (typeof o.input_keyboards === "number" && root.inputKeyboards !== o.input_keyboards) root.inputKeyboards = o.input_keyboards
       // input_error:null is ambiguous (all clear vs not scanned yet, see
       // clearStreak). Errors are never ambiguous — the daemon only writes
       // them on real failure — so they apply at once, while a clear
@@ -570,10 +616,6 @@ Panel {
         var pe = o.pack_error ? String(o.pack_error) : ""
         if (root.packError !== pe) root.packError = pe
       }
-      if (typeof o.last_key_age_s !== "undefined") {
-        if (root.lastKeyAgeS !== o.last_key_age_s) root.lastKeyAgeS = o.last_key_age_s
-      }
-      if (typeof o.audio_ok === "boolean" && root.audioOk !== o.audio_ok) root.audioOk = o.audio_ok
       if (typeof o.audio_error !== "undefined") {
         var ae = o.audio_error ? String(o.audio_error) : ""
         if (root.audioError !== ae) root.audioError = ae
@@ -758,7 +800,19 @@ Panel {
   Process {
     id: ctlProc
     command: [root.sorakeyBin, "ctl", "{}"]
-    onExited: function() {
+    onExited: function(exitCode) {
+      // Process-level failure (daemon down, binary missing): background
+      // polls stay silent (the status flow already resolves those to a
+      // Start button); only explicit user commands toast.
+      if (exitCode !== 0) {
+        if (root.pendingCtlCmd !== "") {
+          root.errorToast = root.pendingCtlCmd + ": daemon not responding."
+          clearErrorToast.restart()
+        }
+        root.pendingCtlCmd = ""
+        root.refreshStatus()
+        return
+      }
       root.refreshStatus()
       // parse the response once: substring matching ("ok":false / "deleted")
       // misses spaced JSON and misfires on error text containing the word
@@ -786,13 +840,35 @@ Panel {
   Process {
     id: svcProc
     command: ["true"]
-    onExited: function() { root.refreshStatus() }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        var detail = String(stderr.text || "").trim().split("\n").pop()
+        root.errorToast = "Service command failed" + (detail !== "" ? ": " + detail : ".")
+        clearErrorToast.restart()
+      }
+      root.refreshStatus()
+    }
     stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector { waitForEnd: true }
   }
 
+  property var pendingSvcAction: []
   Process {
     id: stopFlagProc
     command: ["true"]
+    stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      var args = root.pendingSvcAction
+      root.pendingSvcAction = []
+      if (exitCode !== 0) {
+        var detail = String(stderr.text || "").trim().split("\n").pop()
+        root.errorToast = "Stop flag update failed" + (detail !== "" ? ": " + detail : " — daemon action cancelled.")
+        clearErrorToast.restart()
+        return
+      }
+      if (args.length > 0) root.runService(args)
+    }
   }
 
   // runs sora-uninstall.sh --purge in background (pkexec inside pops the GUI
@@ -833,7 +909,7 @@ Panel {
       } else {
         // Surface the failure instead of silently staying "Not installed".
         var msg = err !== "" ? err.split("\n").pop() : (out !== "" ? out.split("\n").pop() : "Install failed.")
-        root.errorToast = String(msg).slice(0, 500)
+        root.errorToast = root.shortText(msg)
         clearErrorToast.restart()
         installCheck.running = true
       }
@@ -872,7 +948,7 @@ Panel {
         var err = String(stderr.text || "").trim()
         var msg = err !== "" ? err.split("\n").pop() : (out !== "" ? out.split("\n").pop() : "Could not enable — try again.")
         root.captureStatus = ""
-        root.errorToast = String(msg).slice(0, 500)
+        root.errorToast = root.shortText(msg)
         clearErrorToast.restart()
       }
       root.refreshStatus()
@@ -1337,7 +1413,7 @@ SoraDropdown {
             }
             Text {
               id: checkingText
-              text: "Checking status…"
+              text: "Checking…"
               color: root.bar.foreground
               opacity: 0.85
               font.family: root.bar.fontFamily
@@ -1368,7 +1444,7 @@ SoraDropdown {
               spacing: Style.space(8)
               Text {
                 width: parent.width
-                text: "Sorakey - Keyboard access needed"
+                text: "Sorakey: keyboard access needed"
                 color: root.bar.foreground
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.subtitle
@@ -1403,7 +1479,7 @@ SoraDropdown {
                 Button {
                   visible: root.inputError !== ""
                   width: parent.width
-                  text: "Enable keyboard permission with terminal"
+                  text: "Enable with terminal"
                   radius: root.friendlyRadius
                   foreground: root.bar.foreground
                   selected: true
@@ -1567,7 +1643,7 @@ SoraDropdown {
             Text {
               visible: root.keyboardPack === "" && root.keyboardPacks.length === 0
               width: parent.width
-              text: "Import a pack to get started"
+              text: "Import Sound to get started"
               color: root.bar.foreground
               opacity: 0.6
               font.family: root.bar.fontFamily
@@ -1636,7 +1712,7 @@ SoraDropdown {
               Button {
                 id: openFolderButton
                 width: (parent.width - Style.space(8) * 2 - 1) / 2
-                text: "Open Folder"
+                text: "Open folder"
                 radius: root.friendlyRadius
                 verticalPadding: root.buttonYPadding
                 foreground: root.bar.foreground

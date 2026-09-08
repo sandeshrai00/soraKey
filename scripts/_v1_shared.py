@@ -1,5 +1,6 @@
 """Shared V1 tables for import + admin converter."""
 import copy
+import sys
 
 V1_KEY_TABLE = {
     "1": "Escape",
@@ -51,7 +52,7 @@ V1_KEY_TABLE = {
     # Alternative 0x0Exx codes some V1 packs use instead of the main block.
     # 3597/3612 are main-only (their correct names live below); 3613 and
     # 3640 conflict with the main block so they live here (last-wins). Keep in
-    # EXACT lockstep with daemon/src/utils/config_converter.rs — the parity
+    # EXACT lockstep with daemon/src/utils/old_pack_fixer.rs — the parity
     # test compares the two final tables and fails on any divergence.
     "3613": "ControlRight",
     "3639": "Numpad7",
@@ -170,3 +171,41 @@ def _fill_missing_keys(definitions):
             if donor in definitions:
                 definitions[missing] = copy.deepcopy(definitions[donor])
                 break
+
+
+# Detached-run result channel, shared by the import + export pickers so the
+# two copies can't diverge again. When launched via scripts/sorakey-detached
+# (immune to plugin-reload SIGTERM), stdout goes to a log nobody reads —
+# the single result line ALSO goes to --result-file, which SoraService.qml
+# polls (and resumes polling after its own restart).
+RESULT_FILE = None
+
+
+def emit(line):
+    """Result line to stdout AND to the result file (if any)."""
+    print(line, flush=True)
+    if RESULT_FILE:
+        try:
+            with open(RESULT_FILE, "w") as f:
+                f.write(line + "\n")
+        except Exception as e:
+            # A failed write would leave QML polling forever for a line that
+            # never lands; stderr at least reaches the sidecar .log.
+            print(f"RESULT-FILE-WRITE-FAILED ({e}): {line}", file=sys.stderr, flush=True)
+
+
+def take_result_file_argv():
+    """Strip --result-file PATH from argv (any position)."""
+    global RESULT_FILE
+    args = []
+    skip_next = False
+    for i in range(len(sys.argv)):
+        if skip_next:
+            skip_next = False
+            continue
+        if sys.argv[i] == "--result-file" and i + 1 < len(sys.argv):
+            RESULT_FILE = sys.argv[i + 1]
+            skip_next = True
+        else:
+            args.append(sys.argv[i])
+    sys.argv = args

@@ -38,40 +38,14 @@ MAX_PACK_SIZE = 20 * 1024 * 1024
 # non-zip extensions for dialog filter
 NON_ZIP_EXTS = (".7z", ".rar", ".tar", ".gz", ".bz2", ".xz")
 
-# Detached-run support: when launched via scripts/sorakey-detached
-# (immune to plugin-reload SIGTERM), stdout goes to a log nobody reads —
-# the single result line ALSO goes to --result-file, which SoraService.qml
-# polls (and resumes polling after its own restart).
-RESULT_FILE = None
-
-
+# Detached-run support: result channel lives in _v1_shared (single copy).
+# See _v1_shared.emit / take_result_file_argv.
 def emit(line):
-    """Result line to stdout AND to the result file (if any)."""
-    print(line, flush=True)
-    if RESULT_FILE:
-        try:
-            with open(RESULT_FILE, "w") as f:
-                f.write(line + "\n")
-        except Exception:
-            pass
+    _mod.emit(line)
 
 
 def take_result_file_argv():
-    """Strip --result-file PATH from argv (any position)."""
-    global RESULT_FILE
-    args = []
-    it = iter(range(len(sys.argv)))
-    skip_next = False
-    for i in range(len(sys.argv)):
-        if skip_next:
-            skip_next = False
-            continue
-        if sys.argv[i] == "--result-file" and i + 1 < len(sys.argv):
-            RESULT_FILE = sys.argv[i + 1]
-            skip_next = True
-        else:
-            args.append(sys.argv[i])
-    sys.argv = args
+    _mod.take_result_file_argv()
 
 
 def _short(value, limit=50):
@@ -390,7 +364,7 @@ def import_zip(zip_path):
     except zipfile.BadZipFile:
         ext = os.path.splitext(zip_path)[1].lower()
         if ext in NON_ZIP_EXTS:
-            return None, f"Not a ZIP — this is {ext}. Re-compress as .zip."
+            return None, f"Not a ZIP — this is {ext}. Extract it, then compress the folder as .zip."
         return None, "Not a valid ZIP — file may be corrupted."
     except Exception as e:
         return None, f"Can't read file: {_short(e, 40)}"
@@ -458,7 +432,9 @@ def import_zip(zip_path):
         import shutil, pathlib
         # private staging dir: mkdtemp is unique and mode 0700, so a
         # predictable path can't be pre-planted as a symlink.
+        os.makedirs(os.path.dirname(install_dir), exist_ok=True)
         tmp_dir = tempfile.mkdtemp(prefix=os.path.basename(install_dir) + ".tmp.", dir=os.path.dirname(install_dir))
+        skipped_traversal = []
         try:
             prefix = ""
             if strip_folder:
@@ -472,20 +448,31 @@ def import_zip(zip_path):
                     continue
                 # guard against traversal
                 if rel.startswith("/") or ".." in pathlib.PurePosixPath(rel).parts or "\\" in rel:
+                    skipped_traversal.append(name)
                     continue
                 target = os.path.join(tmp_dir, rel)
                 # keep inside tmp_dir (trailing sep: /tmp/pack must not match /tmp/pack-evil)
                 if not os.path.abspath(target).startswith(os.path.abspath(tmp_dir) + os.sep):
+                    skipped_traversal.append(name)
                     continue
                 os.makedirs(os.path.dirname(target), exist_ok=True)
                 import shutil as _sh
                 with zf.open(name) as src, open(target, "wb") as dst:
                     _sh.copyfileobj(src, dst, length=64*1024)
+            if skipped_traversal:
+                # Install proceeds without them; say what was dropped instead
+                # of silently shipping a pack minus files (stderr: sidecar log).
+                print(f"WARNING: skipped {len(skipped_traversal)} unsafe entry(ies): {', '.join(skipped_traversal[:3])}", file=sys.stderr, flush=True)
             with open(os.path.join(tmp_dir, "config.json"), "w") as f:
                 json.dump(cfg, f, indent=4, sort_keys=False)
                 f.write("\n")
             if os.path.exists(install_dir):
-                shutil.rmtree(install_dir)
+                # Never silently destroy the existing pack: move it aside
+                # (mirrors uninstall .bak semantics) instead of rmtree.
+                import time
+                backup = install_dir + f".bak.{int(time.time())}"
+                os.rename(install_dir, backup)
+                print(f"WARNING: existing pack moved aside to {backup}", file=sys.stderr, flush=True)
             os.rename(tmp_dir, install_dir)
         except Exception:
             if os.path.exists(tmp_dir):

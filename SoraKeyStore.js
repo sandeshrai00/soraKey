@@ -1,6 +1,8 @@
 // helpers for bar + panel
 
-// "keyboard/cherrymx-brown-abs" -> "Cherry MX Brown ABS"
+// "keyboard/sugar65" -> "Sugar65" (hyphens/underscores become spaces,
+// each word capitalized; glued vendor prefixes like "cherrymx" split first
+// so user-imported packs with such names still read correctly)
 function prettyPackName(id) {
   var s = String(id || "")
   var slash = s.lastIndexOf("/")

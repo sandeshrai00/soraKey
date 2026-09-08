@@ -25,8 +25,11 @@ Item {
   property string lastExportResult: ""
   property string lastExportError: ""
   property string lastSyncResult: ""
-  // sticky stop: true if the user explicitly stopped the daemon (Panel writes the flag)
-  readonly property bool stoppedFlag: Qt.fileExists("file:///" + Quickshell.env("HOME") + "/.local/share/sorakey/stopped")
+  // sticky stop: true if the user explicitly stopped the daemon (Panel writes the flag).
+  // NOTE: Qt has no fileExists() — the previous readonly binding silently
+  // evaluated false forever, auto-starting the daemon after every user Stop.
+  // The flag is read once here at startup (the only moment it gates anything).
+  property bool stoppedFlag: false
 
   signal packsImported(string packId)
   function notify(title, msg) { Quickshell.execDetached(["notify-send","-a","Sorakey", title, msg]); clearImportTimer.restart() }
@@ -168,11 +171,13 @@ Item {
   Process {
     id: pickRead
     stdout: StdioCollector { waitForEnd: true }
-    onExited: function() {
+    onExited: function(exitCode) {
       var lines = String(stdout.text || "").trim().split("\n")
       var line = lines[lines.length - 1]
       if (line === "" || line === "WAITING") return
-      if (line === "DEAD") {
+      // A failed poll script proves nothing about the dialog, but its
+      // output is untrustworthy — treat exactly like DEAD below.
+      if (line === "DEAD" || exitCode !== 0) {
         if (root.pickKind === "import") {
           root.lastImportError = "Picker closed unexpectedly — try again."
           root.lastImportResult = ""
@@ -199,16 +204,29 @@ Item {
     stderr: StdioCollector { waitForEnd: true }
   }
 
+  // one-shot sticky-stop read: gates the auto-start below.
+  Process {
+    id: stopFlagRead
+    stdout: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      root.stoppedFlag = (exitCode === 0)
+      if (!startProc.running && !root.stoppedFlag) {
+        startProc.command = ["/usr/bin/bash", "-c",
+          'test -x "$HOME/.local/bin/sorakey" && test -f "$HOME/.config/systemd/user/sorakey.service" && systemctl --user enable --now sorakey || exit 0']
+        startProc.running = true
+      }
+      freshnessCheck.running = true
+    }
+  }
+
   Component.onCompleted: {
     // sticky stop: only auto-start if the user hasn't explicitly stopped the daemon.
     // Guard: on first enable the binary/unit don't exist yet (Panel auto-install
     // creates them) — enabling a missing unit only spams a failure, so skip it.
-    if (!startProc.running && !root.stoppedFlag) {
-      startProc.command = ["/usr/bin/bash", "-c",
-        'test -x "$HOME/.local/bin/sorakey" && test -f "$HOME/.config/systemd/user/sorakey.service" && systemctl --user enable --now sorakey || exit 0']
-      startProc.running = true
-    }
-    freshnessCheck.running = true
+    // The flag read completes first (stopFlagRead.onExited starts startProc).
+    stopFlagRead.command = ["/usr/bin/test", "-f",
+      Quickshell.env("HOME") + "/.local/share/sorakey/stopped"]
+    stopFlagRead.running = true
     // resume a picker left in flight by a plugin reload: the dialog runs
     // detached and survives, so keep polling for its result file instead
     // of stranding it (markers older than 10 min are stale crashes).
@@ -224,7 +242,10 @@ Item {
   Process {
     id: resumePoll
     stdout: StdioCollector { waitForEnd: true }
-    onExited: function() {
+    onExited: function(exitCode) {
+      // A failed resume scan resumes nothing: never adopt a kind from
+      // garbage output.
+      if (exitCode !== 0) return
       var kind = String(stdout.text || "").trim().split("\n").pop()
       if (kind !== "import" && kind !== "export") return
       if (kind === "import" && !root.importing) root.importing = true

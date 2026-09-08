@@ -2,6 +2,7 @@ use crate::state::folders;
 use crate::state::packs::SoundPack;
 use crate::state::packs::{SoundpackCache, SoundpackMetadata};
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use super::player::{KeySegments, Segment};
@@ -37,11 +38,11 @@ fn load_audio_file(
         .audio_file
         .as_ref()
         .ok_or_else(|| "No audio_file field in soundpack config".to_string())?;
-    let sanitized = audio_file.trim_start_matches("./").replace('\\', "/");
-    if sanitized.contains("..") || sanitized.contains('\0') || sanitized.starts_with('/') {
-        return Err(format!("Invalid audio_file path: {}", audio_file));
-    }
-    let sound_file_path = format!("{}/{}", soundpack_path, sanitized);
+    let sound_file_path =
+        folders::soundpacks::contained_file(Path::new(soundpack_path), audio_file)
+            .ok_or_else(|| format!("Invalid audio_file path: {}", audio_file))?
+            .to_string_lossy()
+            .to_string();
     load_audio_file_for_path(&sound_file_path, device_rate)
 }
 
@@ -67,7 +68,8 @@ fn load_audio_file_for_path(
                 channels,
                 file_rate,
                 device_rate,
-            );
+            )
+            .map_err(|e| format!("Failed to resample audio: {}", e))?;
             crate::always_print!(
                 "🔁 Resampled soundpack audio {}Hz -> {}Hz in {:.1}ms (Cubic 64/32 0.95)",
                 file_rate,
@@ -223,7 +225,12 @@ fn convert_v1_if_needed(config_path: &str) -> Result<(), String> {
     })?;
 
     crate::utils::old_pack_fixer::convert_v1_to_v2(config_path, config_path, None).map_err(|e| {
-        let _ = std::fs::copy(&backup_path, config_path); // restore the original
+        if let Err(restore_err) = std::fs::copy(&backup_path, config_path) {
+            return format!(
+                "Failed to convert {} from V1 to V2: {} (AND restore from {} failed: {}; original may be damaged)",
+                config_path, e, backup_path, restore_err
+            );
+        }
         format!("Failed to convert {} from V1 to V2: {}", config_path, e)
     })
 }
@@ -263,9 +270,12 @@ pub(super) fn load_pack(soundpack_id: &str) -> Result<LoadedPack, String> {
         return Err("empty soundpack ID".to_string());
     }
 
-    let soundpack_path = folders::soundpacks::soundpack_dir(soundpack_id);
-    let config_path = folders::soundpacks::config_json(soundpack_id);
-    convert_v1_if_needed(&config_path)?;
+    let dir = folders::soundpacks::contained_dir(soundpack_id)
+        .ok_or_else(|| format!("Invalid soundpack path: {}", soundpack_id))?;
+    let config_path = folders::soundpacks::contained_file(&dir, "config.json")
+        .ok_or_else(|| format!("Invalid soundpack config path: {}", soundpack_id))?;
+    let soundpack_path = dir.to_string_lossy().to_string();
+    convert_v1_if_needed(config_path.to_str().unwrap_or(""))?;
     let config_content = std::fs::read_to_string(&config_path)
         .map_err(|e| format!("Failed to read config: {}", e))?;
     let soundpack: SoundPack = serde_json::from_str(&config_content)
@@ -275,6 +285,7 @@ pub(super) fn load_pack(soundpack_id: &str) -> Result<LoadedPack, String> {
     if soundpack.definition_method == "multi" {
         // Multi-method: decode each unique per-key audio file once.
         let mut file_cache: HashMap<String, DecodedAudio> = HashMap::new();
+        let mut failed_files: Vec<String> = Vec::new();
         for (key, key_def) in &soundpack.definitions {
             let audio_file = match &key_def.audio_file {
                 Some(f) => f,
@@ -284,15 +295,17 @@ pub(super) fn load_pack(soundpack_id: &str) -> Result<LoadedPack, String> {
                 originals.insert(key.clone(), cached.clone());
                 continue;
             }
-            let sanitized = audio_file.trim_start_matches("./").replace('\\', "/");
-            if sanitized.contains("..") || sanitized.contains('\0') || sanitized.starts_with('/') {
-                crate::always_eprint!(
-                    "⚠️ [Engine] Skipping invalid per-key audio path '{}'",
-                    audio_file
-                );
-                continue;
-            }
-            let file_path = format!("{}/{}", soundpack_path, sanitized);
+            let file_path = match folders::soundpacks::contained_file(&dir, audio_file) {
+                Some(p) => p.to_string_lossy().to_string(),
+                None => {
+                    crate::always_eprint!(
+                        "⚠️ [Engine] Skipping invalid per-key audio path '{}'",
+                        audio_file
+                    );
+                    failed_files.push(audio_file.clone());
+                    continue;
+                }
+            };
             match load_audio_file_for_path(&file_path, None) {
                 Ok((original, _resampled)) => {
                     let (_samples, channels, sample_rate) = &original;
@@ -311,8 +324,21 @@ pub(super) fn load_pack(soundpack_id: &str) -> Result<LoadedPack, String> {
                         audio_file,
                         e
                     );
+                    failed_files.push(audio_file.clone());
                 }
             }
+        }
+        // A half-broken pack used to install with dead keys and no summary:
+        // name every failed file once, so the damage is visible in one place.
+        if !failed_files.is_empty() {
+            failed_files.sort();
+            failed_files.dedup();
+            crate::always_eprint!(
+                "⚠️ [Engine] Pack '{}' loaded with {} dead audio file(s): {}",
+                soundpack_id,
+                failed_files.len(),
+                failed_files.join(", ")
+            );
         }
     } else {
         // Single-method: one shared audio file for every key.
@@ -354,9 +380,11 @@ pub(super) fn load_pack_prepared(
         "No output sample rate available (no audio device); cannot prepare soundpack".to_string()
     })?;
     let pack = load_pack(soundpack_id)?;
-    let prepared = prepare_pack_segments(pack, device_rate);
+    let prepared = prepare_pack_segments(pack, device_rate)?;
     // Decode + resample scratch is freed by now; hand the pages back instead
-    // of letting this worker thread's arena pin them as RSS.
+    // of letting this worker thread's arena pin them as RSS. glibc-only;
+    // elsewhere this is a no-op foreign call, so skip it entirely.
+    #[cfg(target_env = "gnu")]
     unsafe {
         libc::malloc_trim(0);
     }
@@ -367,7 +395,10 @@ pub(super) fn load_pack_prepared(
 /// fades the (press, release) segment for every key. Called from the load
 /// worker thread (or at startup); takes the pack by value and moves its
 /// buffers into the result (no full-buffer clone).
-pub(super) fn prepare_pack_segments(pack: LoadedPack, device_rate: u32) -> LoadedPack {
+pub(super) fn prepare_pack_segments(
+    pack: LoadedPack,
+    device_rate: u32,
+) -> Result<LoadedPack, String> {
     let mut segments: HashMap<String, KeySegments> = HashMap::with_capacity(pack.originals.len());
     // Resample each unique buffer once: single-method packs share one Arc
     // across every key, multi-method packs one per audio file. Keyed by the
@@ -384,12 +415,15 @@ pub(super) fn prepare_pack_segments(pack: LoadedPack, device_rate: u32) -> Loade
             if let Some((cached, rate)) = resample_cache.get(&ptr) {
                 (cached.clone(), *rate)
             } else {
-                let resampled = Arc::new(super::sound_quality::resample_interleaved(
-                    samples,
-                    *channels,
-                    *file_rate,
-                    device_rate,
-                ));
+                let resampled = Arc::new(
+                    super::sound_quality::resample_interleaved(
+                        samples,
+                        *channels,
+                        *file_rate,
+                        device_rate,
+                    )
+                    .map_err(|e| format!("Failed to resample audio: {}", e))?,
+                );
                 crate::always_print!(
                     "🔁 Resampled soundpack audio {}Hz -> {}Hz",
                     file_rate,
@@ -413,7 +447,7 @@ pub(super) fn prepare_pack_segments(pack: LoadedPack, device_rate: u32) -> Loade
         segments.insert(key.clone(), (press, release));
     }
 
-    LoadedPack {
+    Ok(LoadedPack {
         soundpack: pack.soundpack,
         soundpack_path: pack.soundpack_path,
         // Free the native-rate buffers: segments carry everything playback
@@ -421,7 +455,7 @@ pub(super) fn prepare_pack_segments(pack: LoadedPack, device_rate: u32) -> Loade
         // device switch re-decodes from disk (see `EngineState::prepare_pack`).
         originals: HashMap::new(),
         segments,
-    }
+    })
 }
 
 /// Cuts the [start_ms, end_ms) slice out of `base` and pre-applies the fade.

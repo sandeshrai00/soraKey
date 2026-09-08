@@ -4,14 +4,14 @@ import qs.Commons
 import qs.Ui
 import "SoraKeyStore.js" as Model
 
-// SearchableDropdown fork with inline delete. Search stays in popup.
+// Searchable dropdown fork with inline delete. Search stays in popup.
 Item {
   id: root
 
   property string label: ""
   property string value: ""
   property var options: []
-  property string placeholderText: "Search..."
+  property string placeholderText: "Search…"
   property string emptyText: "No matches"
   property color foreground: Color.popups.text
   property color background: Color.popups.background

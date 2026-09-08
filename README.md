@@ -100,6 +100,11 @@ omarchy plugin remove io.github.sandeshrai00.sorakey --yes
 omarchy restart shell
 ```
 
+> Panel path differs: the panel's Uninstall button runs
+> `sora-uninstall.sh --purge` — a FULL wipe (binary, service, packs,
+> settings, caches). The manual commands above keep your packs as a
+> timestamped `.bak` instead; pass `--purge` yourself for the same wipe.
+
 `sora-uninstall.sh` moves `~/.local/share/sorakey` (packs **and** settings) to a
 `.bak` timestamped folder; `sora-uninstall.sh --purge` deletes it instead. The
 final `omarchy restart shell` drops the bar icon.
@@ -150,9 +155,16 @@ contain a `config.json` (V2 format).
 | `SoraKeyStore.js` | Status/pack parsing helpers |
 | `SoraPackPicker.qml` | Searchable soundpack picker |
 | `scripts/sora-install` | One-click installer |
+| `scripts/sora-build.sh` | Verified-prebuilt-or-source daemon build + bundled-pack sync |
+| `scripts/sora-keyboard-access.sh` | One-approval keyboard-access enabler (udev rule) |
+| `scripts/sorakey-detached` | Reload-proof detached helper launcher (import/export dialogs) |
 | `scripts/sora-pack-import.py` | GTK4 file-picker + ZIP extractor |
-| `scripts/sora-build.sh` | Verified-prebuilt-or-source daemon build |
+| `scripts/sora-export-logs.py` | Log export (dialog or `~/Downloads`) |
+| `scripts/_v1_shared.py` | Shared V1 tables + result-file channel for the pickers |
 | `scripts/sora-uninstall.sh` | Removes daemon, unit file, binary (`--purge`: all data too) |
+| `udev/70-sora-keyboard.rules` | Keyboard-access udev rule source |
+| `daemon/` | The `sorakey` Rust daemon (trimmed MechvibesDX core) |
+| `daemon/soundpacks/` | Built-in V2 soundpacks |
 | `daemon/` | The `sorakey` Rust daemon (trimmed MechvibesDX core) |
 | `daemon/soundpacks/` | Built-in V2 soundpacks |
 

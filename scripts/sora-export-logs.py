@@ -20,35 +20,19 @@ try:
 except Exception:
     Gtk = None
 
-# Detached-run support: see sora-pack-import.py — result line goes to
-# --result-file too, so SoraService.qml can poll it after a plugin reload.
-RESULT_FILE = None
+# Detached-run support: result channel lives in _v1_shared (single copy).
+import importlib.util as _ilu
+import pathlib as _pl
+_spec = _ilu.spec_from_file_location("_v1_shared", str(_pl.Path(__file__).with_name("_v1_shared.py")))
+_mod = _ilu.module_from_spec(_spec); _spec.loader.exec_module(_mod)
 
 
 def emit(line):
-    print(line, flush=True)
-    if RESULT_FILE:
-        try:
-            with open(RESULT_FILE, "w") as f:
-                f.write(line + "\n")
-        except Exception:
-            pass
+    _mod.emit(line)
 
 
 def take_result_file_argv():
-    global RESULT_FILE
-    args = []
-    skip_next = False
-    for i in range(len(sys.argv)):
-        if skip_next:
-            skip_next = False
-            continue
-        if sys.argv[i] == "--result-file" and i + 1 < len(sys.argv):
-            RESULT_FILE = sys.argv[i + 1]
-            skip_next = True
-        else:
-            args.append(sys.argv[i])
-    sys.argv = args
+    _mod.take_result_file_argv()
 
 
 def safe_filename(name):
@@ -60,6 +44,8 @@ def safe_filename(name):
 
 def get_log_contents():
     bin_path = os.path.expanduser("~/.local/bin/sorakey")
+    if not os.path.isfile(bin_path):
+        return None, "daemon not installed — run Install Sorakey first"
     try:
         result = subprocess.run(
             [bin_path, "ctl", '{"cmd":"export_logs"}'],
@@ -151,13 +137,29 @@ def cli_main():
     if contents is None:
         emit(f"ERROR:{name_or_err}")
         sys.exit(1)
-    # cli mode: write to Downloads directly
+    # cli mode: write to Downloads directly. Never silently truncate an
+    # existing file: O_EXCL first, then -1/-2/... suffixes.
     downloads = os.path.expanduser("~/Downloads")
     os.makedirs(downloads, exist_ok=True)
+    base, ext = os.path.splitext(name_or_err)
     path = os.path.join(downloads, name_or_err)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(contents)
-    emit(f"OK:{path}")
+    for n in range(100):
+        candidate = path if n == 0 else os.path.join(downloads, f"{base}-{n}{ext}")
+        try:
+            fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            break
+        except FileExistsError:
+            continue
+    else:
+        emit("ERROR:could not find a free filename in Downloads")
+        sys.exit(1)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(contents)
+    except Exception as e:
+        emit(f"ERROR:could not write {candidate}: {e}")
+        sys.exit(1)
+    emit(f"OK:{candidate}")
     sys.exit(0)
 
 

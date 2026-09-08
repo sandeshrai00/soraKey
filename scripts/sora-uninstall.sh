@@ -1,5 +1,8 @@
 #!/bin/bash
 set -euo pipefail
+# Empty HOME would turn every path below into a system-absolute one —
+# refuse instead of rm -rf'ing the wrong tree.
+: "${HOME:?HOME is unset, refusing to uninstall}"
 PURGE=0
 if [[ "${1:-}" == "--purge" ]]; then PURGE=1; fi
 UDEV_RULE="/etc/udev/rules.d/70-sora-keyboard.rules"
@@ -26,8 +29,12 @@ if [[ $PURGE -eq 1 ]]; then
 else
   # keep packs as .bak
   if [[ -d "$HOME/.local/share/sorakey" ]]; then
-    mv "$HOME/.local/share/sorakey" "$HOME/.local/share/sorakey.bak.$(date +%s)" 2>/dev/null || true
-    echo "moved packs to .bak (use --purge to delete)"
+    bak="$HOME/.local/share/sorakey.bak.$(date +%s)"
+    if mv "$HOME/.local/share/sorakey" "$bak" 2>/dev/null; then
+      echo "moved packs to $bak (use --purge to delete)"
+    else
+      echo "WARNING: could not move packs aside; they remain at $HOME/.local/share/sorakey" >&2
+    fi
   fi
   rm -f "$HOME/.local/bin/sorakey" "$HOME/.config/systemd/user/sorakey.service"
   systemctl --user daemon-reload 2>/dev/null || true

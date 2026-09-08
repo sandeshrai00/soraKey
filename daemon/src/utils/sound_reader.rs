@@ -39,8 +39,37 @@ pub fn decode_interleaved(path: &str) -> Result<(Vec<f32>, u16, u32), String> {
         .make(&track.codec_params, &Default::default())
         .map_err(|e| format!("Failed to create decoder: {}", e))?;
 
-    let sample_rate = track.codec_params.sample_rate.unwrap_or(44_100);
-    let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(2) as u16;
+    let sample_rate = track.codec_params.sample_rate.unwrap_or_else(|| {
+        // Corrupt header: the fallback rate is stamped onto everything
+        // decoded from this file, so log which file guessed.
+        crate::always_eprint!(
+            "⚠️  symphonia: no sample rate in '{}', assuming 44100Hz",
+            path
+        );
+        44_100
+    });
+    let channels = track
+        .codec_params
+        .channels
+        .map(|c| {
+            let n = c.count();
+            if n == 0 {
+                crate::always_eprint!(
+                    "⚠️  symphonia: zero channel count in '{}', assuming stereo",
+                    path
+                );
+                2
+            } else {
+                n
+            }
+        })
+        .unwrap_or_else(|| {
+            crate::always_eprint!(
+                "⚠️  symphonia: no channel layout in '{}', assuming stereo",
+                path
+            );
+            2
+        }) as u16;
 
     // Hard cap on buffered PCM: ~15 min of stereo 48kHz (~86M f32 samples,
     // ~345MB). The header's `n_frames` is attacker-controlled metadata — a
@@ -159,5 +188,11 @@ pub fn duration_ms(path: &str) -> Result<f64, Box<dyn std::error::Error>> {
             return Ok((nf as f64) / (sr as f64) * 1000.0);
         }
     }
+    // No usable duration metadata: callers fall back to 100ms. Say which
+    // file, or baked-in converter timings silently inherit the guess.
+    crate::always_eprint!(
+        "⚠️  symphonia: no duration metadata in '{}', callers fall back to 100ms",
+        path
+    );
     Ok(100.0)
 }
