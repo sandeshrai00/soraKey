@@ -613,7 +613,7 @@ fn convert_audio_format(
         return channel_converted;
     }
 
-    crate::libs::audio::sound_quality::resample_interleaved(
+    crate::libs::sound_quality::resample_interleaved(
         &channel_converted,
         to_channels.max(1),
         from_sample_rate,

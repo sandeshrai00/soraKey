@@ -63,7 +63,7 @@ fn load_audio_file_for_path(
         Some(device_rate) if device_rate != file_rate => {
             let start = std::time::Instant::now();
             let resampled =
-                super::resampler::resample_interleaved(&samples, channels, file_rate, device_rate);
+                super::sound_quality::resample_interleaved(&samples, channels, file_rate, device_rate);
             crate::always_print!(
                 "🔁 Resampled soundpack audio {}Hz -> {}Hz in {:.1}ms (Cubic 64/32 0.95)",
                 file_rate,
@@ -380,7 +380,7 @@ pub(super) fn prepare_pack_segments(pack: LoadedPack, device_rate: u32) -> Loade
             if let Some((cached, rate)) = resample_cache.get(&ptr) {
                 (cached.clone(), *rate)
             } else {
-                let resampled = Arc::new(super::resampler::resample_interleaved(
+                let resampled = Arc::new(super::sound_quality::resample_interleaved(
                     samples,
                     *channels,
                     *file_rate,

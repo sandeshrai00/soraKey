@@ -1,7 +1,7 @@
 //! Control API over Unix socket (`$XDG_RUNTIME_DIR/sorakey.sock`).
 //! One JSON line in, one out. All writes go through config_writer + engine.
 
-use crate::libs::audio::{AudioCommand, AudioEngineHandle};
+use crate::libs::player::{AudioCommand, AudioEngineHandle};
 use crate::libs::names::qualify_soundpack_id;
 use crate::state::folders;
 use std::io::{BufRead, BufReader, Read, Write};

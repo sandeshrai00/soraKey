@@ -38,7 +38,7 @@ fn main() {
     let (keyboard_tx, keyboard_rx) = unbounded::<String>();
     let (hotkey_tx, hotkey_rx) = unbounded::<String>();
 
-    let engine = libs::audio::spawn_engine(keyboard_rx, hotkey_rx);
+    let engine = libs::player::spawn_engine(keyboard_rx, hotkey_rx);
 
     if let Some(path) = commands::serve(engine) {
         always_print!("🔌 sorakey control socket: {}", path.display());
