@@ -129,9 +129,14 @@ Panel {
   property string audioDeviceSelected: ""
   Timer { id: clearErrorToast; interval: 5000; onTriggered: root.errorToast = "" }
 
+  // post-install window: setup finished but no status reading yet — show
+  // "Starting…" (expected, brief) instead of "Checking…" (ambiguous) so a
+  // fresh install never reads as stuck. Cleared on first knowledge.
+  property bool startingUp: false
   readonly property string statusText: {
     if (setupBusy) return "Installing…"
     if (!root.installed) return "Not installed"
+    if (root.startingUp && !root.statusKnown) return "Starting…"
     if (!root.statusKnown) return "Checking…"
     if (!root.running) return "Stopped"
     if (root.inputError !== "") return "No keyboard access"
@@ -587,6 +592,7 @@ Panel {
     }
     if (o.ok === true) {
       var daemonJustUp = !root.running
+      if (root.startingUp) root.startingUp = false
       // any parseable answer proves the daemon is responsive…
       if (root.statusMissed !== 0) root.statusMissed = 0
       // …but a (re)started daemon hasn't scanned keyboards yet: forget
@@ -678,7 +684,9 @@ Panel {
   Component.onCompleted: {
     installCheck.running = true
     root.refreshStatus()
-    root.refreshAudioDevices()
+    // no refreshAudioDevices here: installCheck→installed fires it on boot,
+    // and applyStatus reloads it on daemonJustUp — a third caller only
+    // doubles the empty-fetch retries on slow daemons.
     sectionRead.running = true
     logoRead.running = true
     roundedRead.running = true
@@ -739,6 +747,7 @@ Panel {
           root.clearStreak = 0
           if (root.statusMissed >= 3) {
             root.running = false
+            if (root.startingUp) root.startingUp = false
             if (!root.statusKnown) root.statusKnown = true
           }
         }
@@ -797,6 +806,10 @@ Panel {
         devs = null
       }
       if (!devs || devs.length === 0) {
+        // daemon not ready yet (fresh install / mid-restart): stay silent —
+        // a later poll refreshes. Toasting here is what flashed
+        // "Device refresh failed" on healthy installs.
+        if (!root.statusKnown || root.setupBusy || root.startingUp) return
         // failed/empty fetch: retry a few times (daemon may be mid-restart),
         // keep the existing list instead of wiping it
         devRetryTimer.restart()
@@ -923,6 +936,7 @@ Panel {
         root.statusKnown = false
         root.statusMissed = 0
         root.clearStreak = 0
+        root.startingUp = true
         root.refreshStatus()
         root.refreshPacks()
         root.refreshAudioDevices()

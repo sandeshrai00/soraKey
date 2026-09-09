@@ -263,7 +263,12 @@ Item {
   // reason line (already short), shown in the panel + desktop notification.
   Process {
     id: freshnessCheck
-    command: ["/usr/bin/bash", root.pluginDir + "/scripts/sora-build.sh"]
+    // A just-installed binary (<2 min old) means panel setup ran moments
+    // ago and already synced packs + restarted the daemon — running the
+    // build again would only double-restart and invalidate fresh polls.
+    command: ["/usr/bin/bash", "-c",
+      'if [ -n "$(find "$HOME/.local/bin/sorakey" -mmin -2 2>/dev/null)" ]; then echo "sorakey up to date (fresh install, skipping)"; exit 0; fi; exec /usr/bin/bash "$1"',
+      "_", root.pluginDir + "/scripts/sora-build.sh"]
     stdout: StdioCollector { waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
     onExited: function(exitCode) {
