@@ -23,9 +23,10 @@ release. Otherwise every user compiles from source (slow, needs Rust).
 | only `daemon/soundpacks/**` (pack data) | **NO** — data ships from the repo; the installer syncs it on next shell start |
 | only QML/JS (`SoraWidget.qml`, `SoraService.qml`, `SoraKeyStore.js`, `SoraPackPicker.qml`, `SoraDropdown.qml`, `SoraTextField.qml`), `scripts/*`, README, docs | **NO** — plugin files ship from the repo; users get them with `omarchy plugin update` |
 
-Three files must ALWAYS agree with each other: the git tag,
-`manifest.json:version`, and `daemon/Cargo.toml:version`.
-CI checks all three and fails the run if they differ.
+Four things must ALWAYS agree with each other: the git tag,
+`manifest.json:version`, `daemon/Cargo.toml:version`, **and
+`daemon/Cargo.lock`** (its `sorakey` entry must say the new version too).
+CI runs `cargo --locked` and fails the run if the lockfile disagrees.
 
 ---
 
@@ -36,15 +37,23 @@ CI checks all three and fails the run if they differ.
 You changed `daemon/` and the last release already exists on GitHub.
 
 ```bash
-# 1. Bump BOTH files to the new number (they must match):
+# 1. Bump BOTH version files to the new number (they must match):
 #    manifest.json  ->  "version": "0.1.2",
 #    daemon/Cargo.toml  ->  version = "0.1.2"
 
-# 2. Commit ONLY the bump:
-git add manifest.json daemon/Cargo.toml
+# 2. Sync the lockfile — CI runs `cargo --locked` and fails in ~30s
+#    if Cargo.lock still says the old version. This step is easy to
+#    forget; never skip it:
+cargo update --manifest-path daemon/Cargo.toml --offline 2>/dev/null \
+  || cargo update --manifest-path daemon/Cargo.toml
+grep -m1 -A1 'name = "sorakey"' daemon/Cargo.lock
+# must print version = "0.1.2" — if it still says 0.1.1, STOP and rerun above
+
+# 3. Commit ONLY the bump (all THREE files):
+git add manifest.json daemon/Cargo.toml daemon/Cargo.lock
 git commit -m "bump 0.1.2"
 
-# 3. Push code, then tag, then push THAT ONE tag (not --tags):
+# 4. Push code, then tag, then push THAT ONE tag (not --tags):
 git push origin main
 git tag v0.1.2
 git push origin v0.1.2
@@ -202,6 +211,26 @@ again. Don't re-tag the same number (the tag already exists → CI's
 `release_matches_source` logic and GitHub both treat tags as permanent).
 Bump and follow Situation A.
 
+**CI failed in ~30s with `lock file needs to be updated but --locked was passed`:**
+you bumped `manifest.json` + `daemon/Cargo.toml` but forgot
+`daemon/Cargo.lock` (it still says the old version). One commit, one
+force-tag — stay on the same number, no bump needed:
+
+```bash
+cargo update --manifest-path daemon/Cargo.toml --offline 2>/dev/null \
+  || cargo update --manifest-path daemon/Cargo.toml
+grep -m1 -A1 'name = "sorakey"' daemon/Cargo.lock
+# must print the NEW version — if not, STOP, the update didn't take
+
+git add daemon/Cargo.lock
+git commit -m "fix: sync Cargo.lock to 0.1.2 (bump omitted it, broke --locked)"
+git push origin main
+git tag -f v0.1.2
+git push -f origin tag v0.1.2  # re-runs release on the fixed commit
+# watch https://github.com/sandeshrai00/soraKey/actions → sorakey-ci green
+# ~30s, release-sorakey green ~5-8 min → v0.1.2 shows 4 assets
+```
+
 **CI failed at tests/clippy/fmt:**
 fix the code locally until `cargo test`, `cargo clippy -- -D warnings`,
 and `cargo fmt --check` are all green (run them in `daemon/`), commit,
@@ -255,9 +284,10 @@ only the description is wrong — edit it, don't delete.
 ## 8. Quick sanity checks (paste anytime)
 
 ```bash
-# versions agree? (both lines must print the same number)
+# versions agree? (all three must print the same number — including the lock)
 python3 -c 'import json; print(json.load(open("manifest.json"))["version"])'
 grep -m1 '^version' daemon/Cargo.toml
+grep -m1 -A1 'name = "sorakey"' daemon/Cargo.lock
 
 # do I need a release? (any output = yes)
 # NOTE: needs at least one tag to compare against. No tags yet?
