@@ -627,7 +627,7 @@ Panel {
         if (root.deleting) { root.deleting = false }
         return
       }
-      store.applyPacks(stdout.text)
+      store.applyPacks(stdout.text, root.deleting)
       if (root.deleting) {
         root.deleting = false
         root.deleteConfirmId = ""

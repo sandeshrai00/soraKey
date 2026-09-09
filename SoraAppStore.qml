@@ -129,10 +129,15 @@ Item {
     return false
   }
 
-  function applyPacks(text) {
+  // allowEmpty: only the user-initiated delete flow may legitimately
+  // empty the list. Otherwise an empty answer means "daemon mid pack-sync
+  // rm/cp window" — keep the old list instead of flashing an empty picker.
+  function applyPacks(text, allowEmpty) {
     var p = Model.parsePacks(text)
-    store.keyboardPacks = p.keyboard
-    if (!store.packsKnown && p.keyboard.length > 0) store.packsKnown = true
+    if (p.keyboard.length > 0 || allowEmpty) {
+      store.keyboardPacks = p.keyboard
+      if (p.keyboard.length > 0) store.packsKnown = true
+    }
   }
 
   // Returns device list or null on failure/empty (caller keeps old list).
