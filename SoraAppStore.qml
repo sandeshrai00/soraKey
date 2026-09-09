@@ -4,7 +4,7 @@ import "SoraKeyStore.js" as Model
 // Single source of truth for Sorakey UI state. All daemon answers flow
 // through here; views bind to the derived props only and never guess.
 // Policy: after install or any daemon lifecycle change, Checking… holds a
-// fixed 5s (max ~6s with poll jitter, always <7s) no matter what the
+// fixed 3s (max ~4s with poll jitter, always <7s) no matter what the
 // daemon reports — answers are cached, the timer owns the reveal.
 Item {
   id: store
@@ -33,11 +33,11 @@ Item {
   // auto-install attempts consumed (max 3, then manual Install only)
   property int setupRetries: 0
 
-  // ---- dumb hold: fixed 5s Checking, never ends early ----
+  // ---- dumb hold: fixed 3s Checking, never ends early ----
   property bool installHold: false
   Timer {
     id: installHoldTimer
-    interval: 5000
+    interval: 3000
     onTriggered: { store.installHold = false }
   }
   function beginHold() {

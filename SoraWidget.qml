@@ -234,7 +234,7 @@ Panel {
 
   function runService(args) {
     if (svcProc.running) return
-    // daemon state is about to change: hold Checking… 5s like an install.
+    // daemon state is about to change: hold Checking… 3s like an install.
     store.beginHold()
     svcProc.command = ["systemctl", "--user"].concat(args)
     svcProc.running = true
@@ -768,7 +768,7 @@ Panel {
         store.noteInstalled(true)
         root.errorToast = ""
         store.setupRetries = 0
-        // 5s Checking… starts now: covers daemon spawn + scan + packs.
+        // 3s Checking… starts now: covers daemon spawn + scan + packs.
         store.resetForInstall()
         root.refreshStatus()
         root.refreshPacks()
@@ -1259,7 +1259,7 @@ SoraDropdown {
 
         // Checking placeholder: shown instead of guessing main vs
         // permission, so fresh installs never flash Image 1 before truth.
-        // The installHold window keeps it up for a fixed 5s after install.
+        // The installHold window keeps it up for a fixed 3s after install.
         Item {
           visible: store.installed && (store.installHold || !store.statusKnown) && !root.settingsOpen
           width: parent.width
