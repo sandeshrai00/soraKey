@@ -24,6 +24,12 @@ Item {
   property var audioDevices: []
   property string audioDeviceSelected: ""
   property bool statusKnown: false
+  // packs answered at least once with a non-empty list: gates the controls
+  // so stale defaults (100%, empty picker) can never paint. Empty means
+  // not knowledge — installer guarantees >=1 pack so a legit-empty hold
+  // can't stick. ponytail: one length check, upgrade only if packs gain
+  // required fields.
+  property bool packsKnown: false
   // auto-install attempts consumed (max 3, then manual Install only)
   property int setupRetries: 0
 
@@ -57,7 +63,10 @@ Item {
     if (store.audioError !== "") return "Audio problem: " + store.audioError
     return ""
   }
-  readonly property bool captureReady: store.installed && store.statusKnown && store.inputError === ""
+  // Controls paint only when status AND packs are both known. Errors
+  // (WhyBlock banner, Start button, Pack-failed) need no pack list, so
+  // they render immediately after the hold like before.
+  readonly property bool captureReady: store.installed && store.statusKnown && store.packsKnown && store.inputError === ""
 
   function noteInstalled(present) {
     store.installed = present
@@ -65,6 +74,7 @@ Item {
 
   function resetForInstall() {
     store.statusKnown = false
+    store.packsKnown = false
     store.beginHold()
   }
 
@@ -122,6 +132,7 @@ Item {
   function applyPacks(text) {
     var p = Model.parsePacks(text)
     store.keyboardPacks = p.keyboard
+    if (!store.packsKnown && p.keyboard.length > 0) store.packsKnown = true
   }
 
   // Returns device list or null on failure/empty (caller keeps old list).

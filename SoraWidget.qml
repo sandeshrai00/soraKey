@@ -309,8 +309,7 @@ Panel {
     if (setupBusy) return
     if (root.uninstallBusy || uninstallProc.running) return // never install mid-uninstall
     setupBusy = true
-    store.statusKnown = false
-    store.beginHold()
+    store.resetForInstall()
     setupProc.command = ["/usr/bin/bash", root.setupPath]
     setupProc.running = true
   }
@@ -769,9 +768,8 @@ Panel {
         store.noteInstalled(true)
         root.errorToast = ""
         store.setupRetries = 0
-        store.statusKnown = false
         // 5s Checking… starts now: covers daemon spawn + scan + packs.
-        store.beginHold()
+        store.resetForInstall()
         root.refreshStatus()
         root.refreshPacks()
         root.refreshAudioDevices()
