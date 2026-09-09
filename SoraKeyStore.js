@@ -36,15 +36,32 @@ function parseStatus(text) {
   }
 }
 
-// parse `sorakey ctl packs`
+// parse `sorakey ctl packs` — bundled[] marks preinstalled ids for (pre) badge
 function parsePacks(text) {
-  var empty = { keyboard: [] }
+  var empty = { keyboard: [], bundled: [] }
   try {
     var o = JSON.parse(String(text || "").trim())
     if (!o || typeof o !== "object") return empty
     var kb = Array.isArray(o.keyboard) ? o.keyboard.filter(function(v){ return typeof v==="string" && v.length>0 }) : []
-    return { keyboard: kb }
+    var bd = Array.isArray(o.bundled) ? o.bundled.filter(function(v){ return typeof v==="string" && v.length>0 }) : []
+    return { keyboard: kb, bundled: bd }
   } catch (e) {
     return empty
   }
+}
+
+// ids + bundled set -> [{value, label, isPre}] for the picker
+function packOptionsDetailed(ids, bundled) {
+  var out = []
+  if (!Array.isArray(ids)) return out
+  var pre = {}
+  if (Array.isArray(bundled)) {
+    for (var j = 0; j < bundled.length; j++) pre[String(bundled[j])] = true
+  }
+  for (var i = 0; i < ids.length; i++) {
+    var id = String(ids[i] || "")
+    if (id === "") continue
+    out.push({ value: id, label: prettyPackName(id), isPre: !!pre[id] })
+  }
+  return out
 }

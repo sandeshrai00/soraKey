@@ -47,6 +47,26 @@ pub mod soundpacks {
         Ok(())
     }
 
+    /// Preinstalled pack ids (`keyboard/<name>`) from the sora-build.sh
+    /// stamp (`~/.local/share/sorakey/.bundled-packs`, one basename per
+    /// line). Same sanitization as the writer: plain single-level dir
+    /// names only, so a hand-edited stamp can't inject paths.
+    pub fn bundled_pack_ids() -> std::collections::HashSet<String> {
+        let mut out = std::collections::HashSet::new();
+        let stamp = super::data_dir().join(".bundled-packs");
+        let Ok(content) = std::fs::read_to_string(&stamp) else {
+            return out;
+        };
+        for line in content.lines() {
+            let id = line.trim();
+            if id.is_empty() || id.contains('/') || id.contains("..") || id.starts_with('-') {
+                continue;
+            }
+            out.insert(format!("keyboard/{id}"));
+        }
+        out
+    }
+
     /// Directory for a soundpack id.
     pub fn soundpack_dir(soundpack_id: &str) -> String {
         let sanitized = soundpack_id.replace('\\', "/");

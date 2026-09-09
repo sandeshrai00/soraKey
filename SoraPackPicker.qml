@@ -56,6 +56,15 @@ Item {
   function optionLabel(o) {
     return (o && typeof o === "object") ? String(o.label) : String(o)
   }
+  function optionPre(o) {
+    return !!(o && typeof o === "object" && o.isPre)
+  }
+  readonly property bool hasPre: {
+    for (var i = 0; i < options.length; i++) {
+      if (optionPre(options[i])) return true
+    }
+    return false
+  }
   function currentLabel() {
     for (var i = 0; i < options.length; i++) {
       if (optionValue(options[i]) === value) return optionLabel(options[i])
@@ -238,9 +247,24 @@ Item {
           }
 
           Item {
+            id: preLegend
+            visible: root.hasPre
+            width: parent.width
+            height: visible ? Style.font.caption + Style.spacing.sm : 0
+            Text {
+              textFormat: Text.PlainText
+              anchors.centerIn: parent
+              text: "(pre) = preinstalled"
+              color: Qt.darker(root.foreground, 1.4)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          Item {
             id: listContainer
             width: parent.width
-            height: popup.height - searchHeader.height - 1 - (confirmFooter.visible ? confirmFooter.height + 1 : 0) - (toastFooter.visible ? toastFooter.height + 1 : 0) - Style.spacing.xxs
+            height: popup.height - searchHeader.height - 1 - (preLegend.visible ? preLegend.height : 0) - (confirmFooter.visible ? confirmFooter.height + 1 : 0) - (toastFooter.visible ? toastFooter.height + 1 : 0) - Style.spacing.xxs
 
             Text {
               textFormat: Text.PlainText
@@ -322,14 +346,28 @@ Item {
                     spacing: Style.spacing.xxs
                     anchors.verticalCenter: parent.verticalCenter
 
-                    Text {
-                      textFormat: Text.PlainText
-                      text: root.optionLabel(modelData)
-                      color: index === resultList.currentIndex ? Style.hoverStateColor(root.foreground, root.accent) : root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
-                      elide: Text.ElideRight
+                    Row {
                       width: parent.width
+                      spacing: Style.spacing.xs
+                      Text {
+                        textFormat: Text.PlainText
+                        text: root.optionLabel(modelData)
+                        color: index === resultList.currentIndex ? Style.hoverStateColor(root.foreground, root.accent) : root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.body
+                        elide: Text.ElideRight
+                        width: parent.width - (preBadge.visible ? preBadge.width + Style.spacing.xs : 0)
+                      }
+                      Text {
+                        id: preBadge
+                        textFormat: Text.PlainText
+                        visible: root.optionPre(modelData)
+                        text: "(pre)"
+                        color: index === resultList.currentIndex ? Style.hoverStateColor(root.foreground, root.accent) : Qt.darker(root.foreground, 1.5)
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        anchors.verticalCenter: parent.verticalCenter
+                      }
                     }
                   }
                 }

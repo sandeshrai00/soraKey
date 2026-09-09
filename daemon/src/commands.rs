@@ -539,12 +539,31 @@ fn delete_pack(req: &serde_json::Value, engine: &AudioEngineHandle) -> String {
     }
 }
 
-/// List available packs.
+/// Compile-time fallback for preinstalled ids (used when the
+/// sora-build.sh stamp is missing, e.g. first boot before sync).
+/// Mirrors daemon/soundpacks/keyboard/* — update both together.
+const BUNDLED_PACKS: &[&str] = &[
+    "keyboard/aula-f75",
+    "keyboard/epomaker-rt85",
+    "keyboard/gravastar-v60-pro",
+    "keyboard/pmo-aurora-80",
+    "keyboard/sugar65",
+    "keyboard/yunzii-al65",
+];
+
+/// List available packs. `bundled` lists the subset that shipped with the
+/// plugin (stamp truth, allowlist fallback) so the UI can badge `(pre)`.
 fn packs() -> String {
     let base = folders::soundpacks::get_builtin_soundpacks_dir();
     let mut keyboard: Vec<String> = collect_packs(&base, "keyboard");
     keyboard.sort();
-    ok(serde_json::json!({ "keyboard": keyboard }))
+    let stamp = folders::soundpacks::bundled_pack_ids();
+    let bundled: Vec<String> = keyboard
+        .iter()
+        .filter(|id| stamp.contains(id.as_str()) || BUNDLED_PACKS.iter().any(|b| b == id))
+        .cloned()
+        .collect();
+    ok(serde_json::json!({ "keyboard": keyboard, "bundled": bundled }))
 }
 
 fn collect_packs(base: &Path, kind: &str) -> Vec<String> {
@@ -754,6 +773,23 @@ pub fn key_client(code: &str, down: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bundled allowlist must match daemon/soundpacks/keyboard/* or
+    /// the (pre) badge drifts from what actually ships.
+    #[test]
+    fn bundled_allowlist_matches_shipped_packs() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("soundpacks/keyboard");
+        let mut shipped: Vec<String> = std::fs::read_dir(&root)
+            .expect("soundpacks/keyboard must exist")
+            .flatten()
+            .filter(|e| e.path().join("config.json").exists())
+            .map(|e| format!("keyboard/{}", e.file_name().to_string_lossy()))
+            .collect();
+        shipped.sort();
+        let mut listed: Vec<&str> = BUNDLED_PACKS.to_vec();
+        listed.sort_unstable();
+        assert_eq!(listed, shipped, "BUNDLED_PACKS drifted from shipped packs");
+    }
 
     /// Oversized requests must be rejected, not buffered to OOM.
     #[test]

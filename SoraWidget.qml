@@ -1539,7 +1539,7 @@ SoraDropdown {
                 width: parent.width
                 value: store.keyboardPack
                 roundedCorners: root.roundedCorners
-                options: Model.packOptions(store.keyboardPacks)
+                options: Model.packOptionsDetailed(store.keyboardPacks, store.bundledPacks)
                 foreground: Color.foreground
                 popupBorder: Border.controlColor("normal", Color.foreground, Color.accent)
                                 opacity: store.muted ? 0.5 : 1.0

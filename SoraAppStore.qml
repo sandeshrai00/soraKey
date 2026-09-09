@@ -16,6 +16,8 @@ Item {
   property real volume: 100
   property string keyboardPack: ""
   property var keyboardPacks: []
+  // ids that shipped with the plugin (daemon `bundled` list) for (pre) badge
+  property var bundledPacks: []
   property real perPackVolume: 100
   property string inputError: ""
   property var packLoaded: null
@@ -136,6 +138,7 @@ Item {
     var p = Model.parsePacks(text)
     if (p.keyboard.length > 0 || allowEmpty) {
       store.keyboardPacks = p.keyboard
+      store.bundledPacks = p.bundled
       if (p.keyboard.length > 0) store.packsKnown = true
     }
   }
