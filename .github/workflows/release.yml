@@ -101,7 +101,12 @@ jobs:
           cat dist/sorakey-*/SHA256SUMS-x86_64 dist/sorakey-*/SHA256SUMS-aarch64 > dist/SHA256SUMS
           sed -i 's|dist/||g' dist/SHA256SUMS
           sort -u -o dist/SHA256SUMS dist/SHA256SUMS
+          # download-artifact unpacks to dist/sorakey-*/source.sha256, not
+          # dist/source.sha256 — materialize the expected path (softprops
+          # silently skips missing globs, which is how v0.1.1 lost the file).
+          cp dist/sorakey-x86_64/source.sha256 dist/source.sha256
           cat dist/SHA256SUMS
+          cat dist/source.sha256
       - name: Create Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
