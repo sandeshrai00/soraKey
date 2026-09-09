@@ -163,7 +163,10 @@ Panel {
 
   // Controls that only make sense once keys can be heard. Pack problems
   // are excluded on purpose: the pack picker is the remedy there.
-  readonly property bool captureReady: root.installed && root.statusKnown && root.inputError === ""
+  // packsKnown gates the controls (never the WhyBlock banner): no pack
+  // list yet means no volume/picker/transport paint — that's the Image 1
+  // flash (100%, empty list, Start). Error/Start paths don't need packs.
+  readonly property bool captureReady: root.installed && root.statusKnown && root.packsKnown && root.inputError === ""
   // Shared control heights: default button padding is 6 (too tight),
   // Enable sits at 12 as the primary action; everything else uses 10.
   readonly property int buttonYPadding: Style.space(10)
@@ -794,7 +797,10 @@ Panel {
       }
       var p = Model.parsePacks(stdout.text)
       root.keyboardPacks = p.keyboard
-      if (!root.packsKnown) root.packsKnown = true
+      // ponytail: empty list is not knowledge — one length check; installer
+      // guarantees >=1 pack so a legit-empty hold can't stick. Upgrade to
+      // schema validation if packs ever gain required fields.
+      if (!root.packsKnown && p.keyboard.length > 0) root.packsKnown = true
       if (root.deleting) {
         root.deleting = false
         root.deleteConfirmId = ""
