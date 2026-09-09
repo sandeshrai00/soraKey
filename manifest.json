@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.sandeshrai00.sorakey",
   "name": "Sorakey",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "author": "sandeshrai00",
   "description": "Mechanical keyboard sounds driven by the sorakey daemon: live mute, volume and soundpack controls.",
   "license": "MIT",
