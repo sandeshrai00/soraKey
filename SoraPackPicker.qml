@@ -71,6 +71,16 @@ Item {
     }
     return value
   }
+  function currentIsPre() {
+    for (var i = 0; i < options.length; i++) {
+      if (optionValue(options[i]) === value && optionPre(options[i])) return true
+    }
+    return false
+  }
+  function currentDisplayLabel() {
+    var l = currentLabel()
+    return l ? (currentIsPre() ? l + " (pre)" : l) : ""
+  }
 
   property var filtered: options
   function recomputeFiltered() {
@@ -133,8 +143,8 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
         anchors.leftMargin: trigger.borderLeft + Style.spacing.controlPaddingX
         anchors.rightMargin: trigger.borderRight + Style.spacing.md
-        text: root.currentLabel() || root.placeholderText
-        color: root.currentLabel() ? root.foreground : Qt.darker(root.foreground, 1.5)
+        text: root.currentDisplayLabel() || root.placeholderText
+        color: root.currentDisplayLabel() ? root.foreground : Qt.darker(root.foreground, 1.5)
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
         elide: Text.ElideRight
