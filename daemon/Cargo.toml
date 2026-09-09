@@ -1,6 +1,6 @@
 [package]
 name = "sorakey"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Lean mechanical keyboard sound daemon. Forked from the MechvibesDX core (v0.8.2), stripped of all GUI, with a Unix-socket control API."
 license = "MIT"
