@@ -2,7 +2,18 @@ name: release-sorakey
 on:
   push:
     branches: ["main"]
-    tags: ["v*"]
+    # Compiled inputs only: QML/JS/docs/scripts ship straight from the git
+    # clone, and sora-build.sh hashes daemon/** + rust-toolchain.toml only —
+    # so a QML-only push would rebuild and overwrite `continuous` with a
+    # byte-identical source.sha256 (~20 billed min wasted). Add any NEW
+    # compiled input's path here or its pushes silently won't build.
+    paths: ["daemon/**", "rust-toolchain.toml", ".github/workflows/release.yml"]
+    tags: ["v*"] # versioned tags always build (pipeline runs on the tag push)
+# Rapid pushes cancel the still-queuing build — only the newest commit's
+# prebuilt lands in `continuous`. Saves another 10-20 min on push bursts.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: write
   id-token: write
