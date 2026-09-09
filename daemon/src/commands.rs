@@ -453,6 +453,14 @@ fn delete_pack(req: &serde_json::Value, engine: &AudioEngineHandle) -> String {
     if name.is_empty() || name.contains('/') || name.contains('\\') {
         return fail("invalid id");
     }
+    // Preinstalled packs come back on next sync (sora-build.sh restores any
+    // share pack still present in daemon/soundpacks), so deleting one only
+    // looks permanent for a session and then silently reappears. Refuse
+    // loudly instead — same union (stamp ∪ allowlist) as packs().
+    if folders::soundpacks::bundled_pack_ids().contains(&id) || BUNDLED_PACKS.contains(&id.as_str())
+    {
+        return fail("cannot delete preinstalled pack");
+    }
     let base = folders::soundpacks::get_builtin_soundpacks_dir();
     let target = base.join("keyboard").join(&name);
     if !target.join("config.json").exists() {
@@ -819,6 +827,23 @@ mod tests {
             response.contains("request too large"),
             "oversized request must be rejected, got: {response}"
         );
+    }
+
+    /// Preinstalled packs must be refused before any filesystem touch,
+    /// or a delete would look permanent for one session and silently
+    /// reappear on next sync.
+    #[test]
+    fn delete_preinstalled_pack_is_denied() {
+        let (cmd_tx, _cmd_rx) = crossbeam_channel::unbounded::<AudioCommand>();
+        let engine = AudioEngineHandle { tx: cmd_tx };
+        for id in BUNDLED_PACKS {
+            let req = serde_json::json!({"id": id});
+            let resp = delete_pack(&req, &engine);
+            assert!(
+                resp.contains("\"ok\":false") && resp.contains("preinstalled"),
+                "preinstalled {id} must be denied, got: {resp}"
+            );
+        }
     }
 
     /// Normal-sized requests still get a normal response.
