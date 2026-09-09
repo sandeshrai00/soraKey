@@ -129,14 +129,18 @@ Panel {
   property string audioDeviceSelected: ""
   Timer { id: clearErrorToast; interval: 5000; onTriggered: root.errorToast = "" }
 
-  // post-install window: setup finished but no status reading yet — show
-  // "Starting…" (expected, brief) instead of "Checking…" (ambiguous) so a
-  // fresh install never reads as stuck. Cleared on first knowledge.
+  // post-install window: setup finished but no confirmed reading yet —
+  // show "Starting…" (expected, brief) instead of "Checking…" (ambiguous)
+  // so a fresh install never reads as stuck. Cleared only when knowledge
+  // is COMPLETE (status + packs), never on the first ambiguous answer.
   property bool startingUp: false
+  // packs answered at least once: gates knowledge so the controls never
+  // paint stale defaults (100%, empty list) before the first real reading.
+  property bool packsKnown: false
   readonly property string statusText: {
     if (setupBusy) return "Installing…"
     if (!root.installed) return "Not installed"
-    if (root.startingUp && !root.statusKnown) return "Starting…"
+    if (root.startingUp) return "Starting…"
     if (!root.statusKnown) return "Checking…"
     if (!root.running) return "Stopped"
     if (root.inputError !== "") return "No keyboard access"
@@ -376,6 +380,7 @@ Panel {
     root.statusKnown = false
     root.statusMissed = 0
     root.clearStreak = 0
+    root.packsKnown = false
     setupProc.command = ["/usr/bin/bash", root.setupPath]
     setupProc.running = true
   }
@@ -592,7 +597,13 @@ Panel {
     }
     if (o.ok === true) {
       var daemonJustUp = !root.running
-      if (root.startingUp) root.startingUp = false
+      // fresh-install hold: don't let the FIRST ambiguous answer end the
+      // Starting… window before packs arrive too — stale defaults (100%,
+      // empty list) would flash as Image 1. Re-fire packs; the next poll
+      // completes knowledge. Steady-state polls skip this (packsKnown set).
+      if (daemonJustUp && root.startingUp && !root.packsKnown) {
+        root.refreshPacks()
+      }
       // any parseable answer proves the daemon is responsive…
       if (root.statusMissed !== 0) root.statusMissed = 0
       // …but a (re)started daemon hasn't scanned keyboards yet: forget
@@ -618,7 +629,10 @@ Panel {
       if (ie !== "") {
         if (root.inputError !== ie) root.inputError = ie
         root.clearStreak = 0
+        // an error IS knowledge (daemon only writes real failures): WhyBlock
+        // shows immediately, no packs wait — the fix action needs no pack list.
         if (!root.statusKnown) root.statusKnown = true
+        if (root.startingUp) root.startingUp = false
       } else {
         // hold the previous verdict until the clear is confirmed: a lone
         // null right after a (re)start is the pre-scan lie, and wiping a
@@ -626,7 +640,14 @@ Panel {
         if (root.clearStreak < 2) root.clearStreak += 1
         if (root.clearStreak >= 2) {
           if (root.inputError !== "") root.inputError = ""
-          if (!root.statusKnown) root.statusKnown = true
+          // ...and (fresh installs only) packs must have answered too, or
+          // the controls paint Image 1 (100%, empty list) for a beat
+          // before Image 2 lands. Steady state skips the wait (values
+          // already shown are the previous live ones, not defaults).
+          if (!root.statusKnown && (!root.startingUp || root.packsKnown)) {
+            root.statusKnown = true
+            if (root.startingUp) root.startingUp = false
+          }
         }
       }
       if (typeof o.pack_loaded !== "undefined") {
@@ -645,13 +666,19 @@ Panel {
         var dev = o.audio_device ? String(o.audio_device) : ""
         if (root.audioDeviceSelected !== dev) root.audioDeviceSelected = dev
       }
-      // daemon just came (back) up: ctl works now, so (re)load the device list
-      if (daemonJustUp) root.refreshAudioDevices()
+      // daemon just came (back) up: ctl works now, so (re)load the device
+      // list — and packs, so a restart never shows a stale/missing picker
+      // while status already claims knowledge.
+      if (daemonJustUp) {
+        root.refreshAudioDevices()
+        root.refreshPacks()
+      }
     } else {
       root.running = false
       // daemon answered but not ok: that is still knowledge
       root.clearStreak = 0
       if (!root.statusKnown) root.statusKnown = true
+      if (root.startingUp) root.startingUp = false
       if (root.statusMissed !== 0) root.statusMissed = 0
     }
   }
@@ -736,6 +763,7 @@ Panel {
         if (o && o.ok === false) {
           root.running = false
           if (!root.statusKnown) root.statusKnown = true
+          if (root.startingUp) root.startingUp = false
           if (root.statusMissed !== 0) root.statusMissed = 0
         } else {
           // unreadable answer (daemon mid-restart, socket gone): not
@@ -766,6 +794,7 @@ Panel {
       }
       var p = Model.parsePacks(stdout.text)
       root.keyboardPacks = p.keyboard
+      if (!root.packsKnown) root.packsKnown = true
       if (root.deleting) {
         root.deleting = false
         root.deleteConfirmId = ""
@@ -1452,7 +1481,7 @@ SoraDropdown {
             }
             Text {
               id: checkingText
-              text: "Checking…"
+              text: root.startingUp ? "Starting…" : "Checking…"
               color: root.bar.foreground
               opacity: 0.85
               font.family: root.bar.fontFamily
