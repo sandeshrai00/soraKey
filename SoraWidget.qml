@@ -81,24 +81,9 @@ Panel {
     return ""
   }
 
-  // last reading
-  property bool installed: false
-  property bool running: false
-  property bool muted: false
-  property real volume: 100
-  property string keyboardPack: ""
-  property var keyboardPacks: []
-  property real perPackVolume: 100
-  // daemon health (explains "running but silent")
-  property string inputError: ""
-  // first-reading gate: until `sorakey ctl status` answers once (or
-  // conclusively fails), we know nothing — neither the main controls nor
-  // the permission block may render, or the panel flashes main-then-ask.
-  // A dead daemon resolves to the Start button via the failure branch.
-  property bool statusKnown: false
-  property var packLoaded: null
-  property string packError: ""
-  property string audioError: ""
+  // Single source of truth for daemon state — all status/packs/device
+  // answers flow through the store; views bind to it, never guess.
+  SoraAppStore { id: store }
   // one-tap keyboard-access enable flow (panel button → script → GUI approval)
   property bool captureBusy: false
   property bool terminalBusy: false
@@ -118,49 +103,8 @@ Panel {
   onUpdateStatusChanged: if (root.updateStatus !== "") root.lastResult = root.shortText(root.updateStatus)
   onCaptureStatusChanged: if (root.captureStatus !== "") root.lastResult = root.shortText(root.captureStatus)
   property string pendingCtlCmd: ""
-  property var audioDevices: []
-  property string audioDeviceSelected: ""
   Timer { id: clearErrorToast; interval: 5000; onTriggered: root.errorToast = "" }
 
-  // Dumb hold after install / daemon lifecycle change: show "Checking…"
-  // for a fixed 5s (max ~6s with poll jitter, always <7s) no matter what
-  // the daemon reports, then reveal truth. Replaces startingUp/packsKnown/
-  // clearStreak/statusMissed inference — the 5s window covers daemon spawn
-  // (~2s) + keyboard scan (~5s) + packs fetch, so no guessing is needed.
-  property bool installHold: false
-  Timer {
-    id: installHoldTimer
-    interval: 5000
-    onTriggered: { root.installHold = false }
-  }
-  readonly property string statusText: {
-    if (setupBusy) return "Installing…"
-    if (!root.installed) return "Not installed"
-    if (root.installHold) return "Checking…"
-    if (!root.statusKnown) return "Checking…"
-    if (!root.running) return "Stopped"
-    if (root.inputError !== "") return "No keyboard access"
-    if (root.packLoaded === false) return "Pack failed"
-    if (root.keyboardPack === "" && root.keyboardPacks.length === 0) return "No soundpack"
-    return root.muted ? "Muted" : "Playing"
-  }
-
-  // Short human-readable cause for the banner. Never terminal commands —
-  // the fix action is the button below it. Silent while the WhyBlock column
-  // is showing (it carries its own phase text during the enable run).
-  readonly property string healthHint: {
-    if (root.showWhyBlock) return ""
-    if (root.captureBusy) return "Enabling keyboard sounds… approve the one-time dialog."
-    if (root.inputError !== "") return ""
-    if (root.packLoaded === false && root.packError !== "") return "Soundpack failed: " + root.packError
-    if (root.audioError !== "") return "Audio problem: " + root.audioError
-    return ""
-  }
-
-  // Controls that only make sense once keys can be heard. Pack problems
-  // are excluded on purpose: the pack picker is the remedy there.
-  // (The installHold window hides these until packs arrive — no gate needed.)
-  readonly property bool captureReady: root.installed && root.statusKnown && root.inputError === ""
   // Shared control heights: default button padding is 6 (too tight),
   // Enable sits at 12 as the primary action; everything else uses 10.
   readonly property int buttonYPadding: Style.space(10)
@@ -176,7 +120,7 @@ Panel {
   // Shown instead of healthHint when capture is blocked. Stays visible
   // DURING the enable run too, so the box never vanishes mid-approval —
   // the buttons flip to their loading state instead.
-  readonly property bool showWhyBlock: root.inputError !== ""
+  // (Visibility key: store.showWhyBlock — owned by the store.)
   // enable-run phase text: approval dialog first, then the script's verify
   // loop (up to ~10s). Driven by a timer, cleared on process exit.
   property string capturePhase: ""
@@ -211,18 +155,21 @@ Panel {
     interval: 15000
     onTriggered: root.captureSettling = false
   }
-  onInputErrorChanged: {
-    if (root.inputError === "" && root.captureSettling) {
-      root.captureSettling = false
-      captureSettleTimer.stop()
-    }
-    if (root.inputError === "" && root.terminalBusy) {
-      root.terminalBusy = false
-      terminalTimeout.stop()
-      capturePhaseTimer.stop()
-      root.capturePhase = "Finishing up…"
-      root.captureSettling = true
-      captureSettleTimer.restart()
+  Connections {
+    target: store
+    function onInputErrorChanged() {
+      if (store.inputError === "" && root.captureSettling) {
+        root.captureSettling = false
+        captureSettleTimer.stop()
+      }
+      if (store.inputError === "" && root.terminalBusy) {
+        root.terminalBusy = false
+        terminalTimeout.stop()
+        capturePhaseTimer.stop()
+        root.capturePhase = "Finishing up…"
+        root.captureSettling = true
+        captureSettleTimer.restart()
+      }
     }
   }
   readonly property string whyLearnMoreUrl: "https://github.com/sandeshrai00/soraKey/blob/main/docs/keyboard-access.md"
@@ -258,9 +205,8 @@ Panel {
   }
 
   property bool setupBusy: false
-  // auto-install attempts consumed (max 3, then manual Install button only).
-  // Manual taps never consume — the user always keeps an escape hatch.
-  property int setupRetries: 0
+  // auto-install attempts live in store.setupRetries (max 3, then manual
+  // Install button only). Manual taps never consume.
   property bool settingsOpen: false
   property bool uninstallArmed: false
   property bool uninstallBusy: false
@@ -279,7 +225,7 @@ Panel {
   implicitHeight: button.implicitHeight
 
   function sendCtl(obj) {
-    if (!root.installed) return
+    if (!store.installed) return
     if (ctlProc.running) return
     pendingCtlCmd = String(obj && obj.cmd ? obj.cmd : "")
     ctlProc.command = [root.sorakeyBin, "ctl", JSON.stringify(obj)]
@@ -289,36 +235,35 @@ Panel {
   function runService(args) {
     if (svcProc.running) return
     // daemon state is about to change: hold Checking… 5s like an install.
-    root.installHold = true
-    installHoldTimer.restart()
+    store.beginHold()
     svcProc.command = ["systemctl", "--user"].concat(args)
     svcProc.running = true
   }
 
   function setMuted(on) {
-    root.muted = on
+    store.muted = on
     root.sendCtl({ cmd: "mute", muted: on })
   }
 
   function setVolume(v) {
-    root.volume = v
+    store.volume = v
     root.sendCtl({ cmd: "volume", value: v })
   }
 
   function setKeyboardPack(id) {
-    root.keyboardPack = id
+    store.keyboardPack = id
     root.sendCtl({ cmd: "keyboard_pack", id: id })
   }
 
   function setPerPackVolume(v) {
-    root.perPackVolume = v
-    if (root.keyboardPack) root.sendCtl({ cmd: "per_pack_volume", id: root.keyboardPack, value: v })
+    store.perPackVolume = v
+    if (store.keyboardPack) root.sendCtl({ cmd: "per_pack_volume", id: store.keyboardPack, value: v })
     else root.sendCtl({ cmd: "volume", value: v })
   }
 
   function resetVolume() {
-    if (!root.keyboardPack) return
-    root.sendCtl({ cmd: "reset_volume", id: root.keyboardPack })
+    if (!store.keyboardPack) return
+    root.sendCtl({ cmd: "reset_volume", id: store.keyboardPack })
   }
 
   function deletePack(id) {
@@ -328,9 +273,9 @@ Panel {
   }
 
   function pickRandomPack() {
-    if (!root.keyboardPacks || root.keyboardPacks.length === 0) return
-    var pool = root.keyboardPacks
-    if (pool.length > 1 && root.keyboardPack) pool = pool.filter(function(id){ return id !== root.keyboardPack })
+    if (!store.keyboardPacks || store.keyboardPacks.length === 0) return
+    var pool = store.keyboardPacks
+    if (pool.length > 1 && store.keyboardPack) pool = pool.filter(function(id){ return id !== store.keyboardPack })
     var pick = pool[Math.floor(Math.random()*pool.length)]
     if (pick) root.setKeyboardPack(pick)
   }
@@ -364,9 +309,8 @@ Panel {
     if (setupBusy) return
     if (root.uninstallBusy || uninstallProc.running) return // never install mid-uninstall
     setupBusy = true
-    root.statusKnown = false
-    root.installHold = true
-    installHoldTimer.restart()
+    store.statusKnown = false
+    store.beginHold()
     setupProc.command = ["/usr/bin/bash", root.setupPath]
     setupProc.running = true
   }
@@ -566,8 +510,8 @@ Panel {
     if (ok) {
       root.uninstallArmed = false
       Quickshell.execDetached(["omarchy", "plugin", "remove", root.pluginId, "--yes"])
-      root.installed = false
-      root.running = false
+      store.installed = false
+      store.running = false
     } else {
       root.uninstallArmed = false
       root.errorToast = root.shortText(err || "Uninstall failed.")
@@ -575,64 +519,12 @@ Panel {
     }
   }
 
+  // Status answers go to the store (single source of truth); a just-up
+  // daemon also reloads devices + packs here.
   function applyStatus(text) {
-    var o = Model.parseStatus(text)
-    if (!o) {
-      // no reading
-      return
-    }
-    if (o.ok === true) {
-      var daemonJustUp = !root.running
-      // guarded writes: identical poll answers must not fan out bindings at 1Hz
-      if (root.running !== true) root.running = true
-      if (root.installed !== true) root.installed = true
-      var muted = o.muted === true
-      if (root.muted !== muted) root.muted = muted
-      if (typeof o.volume === "number" && root.volume !== o.volume) root.volume = o.volume
-      if (typeof o.per_pack_volume === "number" && root.perPackVolume !== o.per_pack_volume) root.perPackVolume = o.per_pack_volume
-      var pack = String(o.keyboard_pack || "")
-      if (root.keyboardPack !== pack) root.keyboardPack = pack
-      // health fields (absent on older daemons → keep previous value).
-      // Single-poll trust: the installHold window already covers the
-      // daemon's startup pre-scan lie, so no confirm counter is needed.
-      var ie = (typeof o.input_error !== "undefined")
-        ? (o.input_error ? String(o.input_error) : "")
-        : root.inputError
-      if (ie !== "") {
-        if (root.inputError !== ie) root.inputError = ie
-      } else {
-        if (root.inputError !== "") root.inputError = ""
-      }
-      // During the hold, cache only — the timer owns the reveal, so no
-      // answer (clear or error) can end Checking… early and flash Image 1.
-      if (!root.installHold && !root.statusKnown) root.statusKnown = true
-      if (typeof o.pack_loaded !== "undefined") {
-        var pl = (o.pack_loaded === true) ? true : ((o.pack_loaded === false) ? false : null)
-        if (root.packLoaded !== pl) root.packLoaded = pl
-      }
-      if (typeof o.pack_error !== "undefined") {
-        var pe = o.pack_error ? String(o.pack_error) : ""
-        if (root.packError !== pe) root.packError = pe
-      }
-      if (typeof o.audio_error !== "undefined") {
-        var ae = o.audio_error ? String(o.audio_error) : ""
-        if (root.audioError !== ae) root.audioError = ae
-      }
-      if (typeof o.audio_device !== "undefined") {
-        var dev = o.audio_device ? String(o.audio_device) : ""
-        if (root.audioDeviceSelected !== dev) root.audioDeviceSelected = dev
-      }
-      // daemon just came (back) up: ctl works now, so (re)load the device
-      // list — and packs, so a restart never shows a stale/missing picker
-      // while status already claims knowledge.
-      if (daemonJustUp) {
-        root.refreshAudioDevices()
-        root.refreshPacks()
-      }
-    } else {
-      root.running = false
-      // daemon answered but not ok: cache it; the hold still owns the reveal.
-      if (!root.installHold && !root.statusKnown) root.statusKnown = true
+    if (store.applyStatus(text)) {
+      root.refreshAudioDevices()
+      root.refreshPacks()
     }
   }
 
@@ -642,20 +534,20 @@ Panel {
   }
 
   function refreshPacks() {
-    if (!root.installed) return
+    if (!store.installed) return
     if (packsProc.running) return
     packsProc.running = true
   }
 
   function refreshAudioDevices() {
-    if (!root.installed) return
+    if (!store.installed) return
     if (devicesProc.running) return
     devicesProc.running = true
   }
 
   function setAudioDevice(id) {
     // empty string = system default
-    root.audioDeviceSelected = id
+    store.audioDeviceSelected = id
     root.sendCtl({ cmd: "select_device", id: id === "" ? null : id })
   }
 
@@ -690,16 +582,16 @@ Panel {
     id: installCheck
     command: ["/usr/bin/bash", "-c", 'test -x "$1" && test -f "$2"', "_", root.sorakeyBin, root.home + "/.config/systemd/user/sorakey.service"]
     onExited: function(exitCode) {
-      root.installed = (exitCode === 0)
-      if (root.installed) {
+      store.installed = (exitCode === 0)
+      if (store.installed) {
         root.refreshStatus()
         root.refreshAudioDevices()
-      } else if (root.setupRetries < 3 && !setupBusy && !root.uninstallBusy && !uninstallProc.running) {
+      } else if (store.setupRetries < 3 && !setupBusy && !root.uninstallBusy && !uninstallProc.running) {
         // Auto-run setup after URL install (like Spotify). Bounded at 3 —
         // more failures mean something persistent; the manual Install
         // button (unlimited) takes over. installCheck's 5s recheck plus
         // this counter replace the old one-shot flag + retry timer.
-        root.setupRetries += 1
+        store.setupRetries += 1
         Qt.callLater(function(){ root.install() })
       }
     }
@@ -710,15 +602,19 @@ Panel {
     command: [root.sorakeyBin, "ctl", "{\"cmd\":\"status\"}"]
     onExited: function(exitCode) {
       if (exitCode === 0) {
-        root.applyStatus(stdout.text)
+        // store owns the answers; a just-up daemon also reloads devices + packs here.
+        if (store.applyStatus(stdout.text)) {
+          root.refreshAudioDevices()
+          root.refreshPacks()
+        }
       } else {
         // Either not installed or stopped (daemon mid-restart, socket
         // gone, or answered not-ok): down immediately. Lifecycle changes
         // hold Checking… via installHold, so no bounding counter is
         // needed — the hold covers the restart window, and a truly dead
         // daemon resolves to the Start button on the next reveal.
-        root.running = false
-        if (!root.installHold && !root.statusKnown) root.statusKnown = true
+        store.running = false
+        if (!store.installHold && !store.statusKnown) store.statusKnown = true
       }
     }
     stdout: StdioCollector { waitForEnd: true }
@@ -732,8 +628,7 @@ Panel {
         if (root.deleting) { root.deleting = false }
         return
       }
-      var p = Model.parsePacks(stdout.text)
-      root.keyboardPacks = p.keyboard
+      store.applyPacks(stdout.text)
       if (root.deleting) {
         root.deleting = false
         root.deleteConfirmId = ""
@@ -750,15 +645,8 @@ Panel {
     stdout: StdioCollector { waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
     onExited: function(exitCode, exitStatus) {
-      var out = String(stdout.text || "").trim()
-      var devs = null
-      try {
-        var r = JSON.parse(out)
-        devs = (r && r.ok && Array.isArray(r.devices)) ? r.devices : null
-      } catch (e) {
-        devs = null
-      }
-      if (!devs || devs.length === 0) {
+      var devs = store.parseDevices(String(stdout.text || ""))
+      if (!devs) {
         // Stay silent and keep the existing list: daemonJustUp, panel-open
         // and Rescan re-fire this. The old 3× retry + toast is what flashed
         // "Device refresh failed" on healthy installs.
@@ -768,11 +656,11 @@ Panel {
       var opts = devs.map(function(d){ return { value: String(d.id), label: String(d.name) } })
       opts.unshift({ value: "", label: "System default" })
       var ids = opts.map(function(o){ return o.value }).join("\n")
-      var cur = root.audioDevices.map(function(o){ return o.value }).join("\n")
-      if (ids !== cur) root.audioDevices = opts
+      var cur = store.audioDevices.map(function(o){ return o.value }).join("\n")
+      if (ids !== cur) store.audioDevices = opts
       // saved device vanished from a good enumeration (unplugged/renamed):
       // fall back to System default instead of showing a raw id
-      if (root.audioDeviceSelected !== "" && ids.split("\n").indexOf(root.audioDeviceSelected) === -1)
+      if (store.audioDeviceSelected !== "" && ids.split("\n").indexOf(store.audioDeviceSelected) === -1)
         root.setAudioDevice("")
     }
   }
@@ -878,13 +766,12 @@ Panel {
       var out = String(stdout.text || "").trim()
       var err = String(stderr.text || "").trim()
       if (exitCode === 0) {
-        root.installed = true
+        store.noteInstalled(true)
         root.errorToast = ""
-        root.setupRetries = 0
-        root.statusKnown = false
+        store.setupRetries = 0
+        store.statusKnown = false
         // 5s Checking… starts now: covers daemon spawn + scan + packs.
-        root.installHold = true
-        installHoldTimer.restart()
+        store.beginHold()
         root.refreshStatus()
         root.refreshPacks()
         root.refreshAudioDevices()
@@ -944,20 +831,20 @@ Panel {
   Timer {
     interval: 1000
     repeat: true
-    running: root.installed && root.opened
+    running: store.installed && root.opened
     onTriggered: root.refreshStatus()
   }
   Timer {
     interval: 30000
     repeat: true
-    running: root.installed && root.opened
+    running: store.installed && root.opened
     onTriggered: root.refreshPacks()
   }
   // light poll when closed, 10s (open gets 1s + instant refresh on open)
   Timer {
     interval: 10000
     repeat: true
-    running: root.installed && !root.opened
+    running: store.installed && !root.opened
     onTriggered: root.refreshStatus()
   }
 
@@ -965,7 +852,7 @@ Panel {
   Timer {
     interval: 5000
     repeat: true
-    running: !root.installed && !setupBusy
+    running: !store.installed && !setupBusy
     onTriggered: {
       installCheck.running = true
       root.refreshStatus()
@@ -984,25 +871,25 @@ Panel {
         fillMode: Image.PreserveAspectFit
         smooth: true
         mipmap: true
-        opacity: (root.running && root.muted) ? 0.5 : 1.0
+        opacity: (store.running && store.muted) ? 0.5 : 1.0
       }
     }
-    dimmed: !root.running
-    active: root.running && root.muted
-    tooltipText: "Sorakey — " + root.statusText + "\nRight-click: Mute\nCtrl+Alt+M: Global mute"
+    dimmed: !store.running
+    active: store.running && store.muted
+    tooltipText: "Sorakey — " + store.statusText + "\nRight-click: Mute\nCtrl+Alt+M: Global mute"
     onPressed: function(b) {
       if (b === Qt.RightButton) {
-        if (root.running) root.setMuted(!root.muted)
+        if (store.running) root.setMuted(!store.muted)
       } else {
         root.toggle()
       }
     }
     onWheelMoved: function(delta) {
-      if (!root.running) return
+      if (!store.running) return
       var step = delta > 0 ? 5 : -5
-      var cur = root.keyboardPack ? root.perPackVolume : root.volume
+      var cur = store.keyboardPack ? store.perPackVolume : store.volume
       var v = Math.max(0, Math.min(100, cur + step))
-      if (root.keyboardPack) root.setPerPackVolume(v)
+      if (store.keyboardPack) root.setPerPackVolume(v)
       else root.setVolume(v)
     }
   }
@@ -1050,7 +937,7 @@ Panel {
             fillMode: Image.PreserveAspectFit
             smooth: true
             mipmap: true
-            opacity: root.muted ? 0.5 : 1.0
+            opacity: store.muted ? 0.5 : 1.0
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             layer.enabled: true
@@ -1083,12 +970,12 @@ Panel {
                 height: 8
                 radius: 4
                 anchors.verticalCenter: parent.verticalCenter
-                color: (!root.installed || !root.running) ? Qt.darker(root.bar.foreground, 2.0)
-                  : (root.muted ? Qt.darker(root.bar.foreground, 1.3)
+                color: (!store.installed || !store.running) ? Qt.darker(root.bar.foreground, 2.0)
+                  : (store.muted ? Qt.darker(root.bar.foreground, 1.3)
                     : (root.heroMatchTheme ? Color.accent : root.bar.foreground))
               }
               Text {
-                text: root.statusText
+                text: store.statusText
                 color: root.heroMatchTheme ? Color.accent : root.bar.foreground
                 opacity: 0.6
                 font.family: root.bar.fontFamily
@@ -1100,13 +987,13 @@ Panel {
 
           ToggleSwitch {
             id: muteSwitch
-            checked: root.muted
-            enabled: root.running && root.inputError === ""
+            checked: store.muted
+            enabled: store.running && store.inputError === ""
             rounded: root.roundedCorners
             foreground: root.bar.foreground
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            onToggled: root.setMuted(!root.muted)
+            onToggled: root.setMuted(!store.muted)
             layer.enabled: root.heroMatchTheme
             layer.effect: MultiEffect {
               colorization: 1.0
@@ -1173,7 +1060,7 @@ SoraDropdown {
                 foreground: Color.foreground
                 popupBorder: Border.controlColor("normal", Color.foreground, Color.accent)
                 rowHeight: Style.spacing.controlHeight + 8
-                opacity: root.muted ? 0.5 : 1.0
+                opacity: store.muted ? 0.5 : 1.0
                 onChanged: function(v){ root.moveToSection(v) }
               }
               MouseArea {
@@ -1241,13 +1128,13 @@ SoraDropdown {
                 SoraDropdown {
                   id: audioDrop
                   anchors.fill: parent
-                  value: root.audioDeviceSelected
+                  value: store.audioDeviceSelected
                   roundedCorners: root.roundedCorners
-                  options: root.audioDevices
+                  options: store.audioDevices
                   foreground: Color.foreground
                   popupBorder: Border.controlColor("normal", Color.foreground, Color.accent)
                   rowHeight: Style.spacing.controlHeight + 8
-                  opacity: root.muted ? 0.5 : 1.0
+                  opacity: store.muted ? 0.5 : 1.0
                   onChanged: function(v){ root.setAudioDevice(v) }
                 }
                 MouseArea {
@@ -1288,7 +1175,7 @@ SoraDropdown {
                 width: (parent.width - Style.space(8)) / 2
                 verticalPadding: root.buttonYPadding
                 tooltipText: "Save a report of recent errors to a file"
-                enabled: !root.exporting && root.installed
+                enabled: !root.exporting && store.installed
                 onClicked: root.triggerExport()
               
               }
@@ -1353,7 +1240,7 @@ SoraDropdown {
 
         // install prompt
         Item {
-          visible: !root.installed && !root.settingsOpen
+          visible: !store.installed && !root.settingsOpen
           width: parent.width
           implicitHeight: installButton.implicitHeight
 
@@ -1376,7 +1263,7 @@ SoraDropdown {
         // permission, so fresh installs never flash Image 1 before truth.
         // The installHold window keeps it up for a fixed 5s after install.
         Item {
-          visible: root.installed && (root.installHold || !root.statusKnown) && !root.settingsOpen
+          visible: store.installed && (store.installHold || !store.statusKnown) && !root.settingsOpen
           width: parent.width
           implicitHeight: checkingRow.implicitHeight
           Row {
@@ -1412,20 +1299,20 @@ SoraDropdown {
         // controls — gated by knowledge AND hold: while Checking (hold or
         // unknown), only the placeholder above shows
         Column {
-          visible: root.installed && !root.installHold && root.statusKnown && !root.settingsOpen
+          visible: store.installed && !store.installHold && store.statusKnown && !root.settingsOpen
           width: parent.width
           spacing: Style.space(14)
 
           // health banner — the fix action is a button, never a command
           Column {
-            visible: root.healthHint !== "" || root.showWhyBlock || root.captureBusy
+            visible: store.healthHint !== "" || store.showWhyBlock || root.captureBusy
             width: parent.width
             spacing: Style.space(6)
             PanelSectionHeader { text: "NEEDS ATTENTION"; foreground: root.bar.foreground }
             // blocked state: one plain line, one big button, one learn-more
             // link. Details live in docs/keyboard-access.md, not here.
             Column {
-              visible: root.showWhyBlock
+              visible: store.showWhyBlock
               width: parent.width
               spacing: Style.space(8)
               Text {
@@ -1463,7 +1350,7 @@ SoraDropdown {
                   onClicked: root.enableCapture()
                 }
                 Button {
-                  visible: root.inputError !== ""
+                  visible: store.inputError !== ""
                   width: parent.width
                   text: "Enable with terminal"
                   radius: root.friendlyRadius
@@ -1529,16 +1416,16 @@ SoraDropdown {
               }
             }
             Text {
-              visible: root.healthHint !== ""
+              visible: store.healthHint !== ""
               width: parent.width
-              text: root.healthHint
+              text: store.healthHint
               color: "#ff6b6b"
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
             }
             Row {
-              visible: !root.running
+              visible: !store.running
               width: parent.width
               spacing: Style.space(8)
               Button {
@@ -1554,11 +1441,11 @@ SoraDropdown {
             PanelSeparator { foreground: root.bar.foreground }
           }
 
-          PanelSeparator { visible: root.captureReady; foreground: root.bar.foreground }
+          PanelSeparator { visible: store.captureReady; foreground: root.bar.foreground }
 
           // keyboard volume — per pack
           Column {
-            visible: root.captureReady
+            visible: store.captureReady
             width: parent.width
             spacing: Style.space(6)
 
@@ -1577,9 +1464,9 @@ SoraDropdown {
                     id: volLabel
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
-                    text: Math.round(root.perPackVolume) + "%"
+                    text: Math.round(store.perPackVolume) + "%"
                     color: root.bar.foreground
-                    opacity: volHover.containsMouse ? 1.0 : (root.keyboardPack !== "" ? 0.85 : 0.6)
+                    opacity: volHover.containsMouse ? 1.0 : (store.keyboardPack !== "" ? 0.85 : 0.6)
                     font.family: root.bar.fontFamily
                     font.pixelSize: Style.font.body
                     font.bold: true
@@ -1588,7 +1475,7 @@ SoraDropdown {
                     id: volHover
                     anchors.fill: parent
                     anchors.margins: -Style.space(4)
-                    visible: root.keyboardPack !== ""
+                    visible: store.keyboardPack !== ""
                     cursorShape: Qt.PointingHandCursor
                     hoverEnabled: true
                     ToolTip.text: "Reset to pack default"
@@ -1609,25 +1496,25 @@ SoraDropdown {
                 minimum: 0
                 maximum: 100
                 integer: true
-                value: root.perPackVolume
-                enabled: root.running && root.keyboardPack !== ""
+                value: store.perPackVolume
+                enabled: store.running && store.keyboardPack !== ""
                 onReleased: root.setPerPackVolume(liveValue)
               }
             }
           }
 
           // Soundpacks
-          PanelSeparator { visible: root.captureReady; foreground: root.bar.foreground }
+          PanelSeparator { visible: store.captureReady; foreground: root.bar.foreground }
 
           Column {
-            visible: root.captureReady
+            visible: store.captureReady
             width: parent.width
             spacing: Style.space(8)
 
             PanelSectionHeader { text: "SOUNDPACKS"; foreground: root.bar.foreground }
 
             Text {
-              visible: root.keyboardPack === "" && root.keyboardPacks.length === 0
+              visible: store.keyboardPack === "" && store.keyboardPacks.length === 0
               width: parent.width
               text: "Import Sound to get started"
               color: root.bar.foreground
@@ -1636,7 +1523,7 @@ SoraDropdown {
               font.pixelSize: Style.font.caption
             }
             Button {
-              visible: root.keyboardPack === "" && root.keyboardPacks.length === 0
+              visible: store.keyboardPack === "" && store.keyboardPacks.length === 0
               text: root.importing ? "Importing…" : "Import Sound"
               radius: root.friendlyRadius
               verticalPadding: root.buttonYPadding
@@ -1652,12 +1539,12 @@ SoraDropdown {
               SoraPackPicker {
                 id: kbPack
                 width: parent.width
-                value: root.keyboardPack
+                value: store.keyboardPack
                 roundedCorners: root.roundedCorners
-                options: Model.packOptions(root.keyboardPacks)
+                options: Model.packOptions(store.keyboardPacks)
                 foreground: Color.foreground
                 popupBorder: Border.controlColor("normal", Color.foreground, Color.accent)
-                                opacity: root.muted ? 0.5 : 1.0
+                                opacity: store.muted ? 0.5 : 1.0
                 rowHeight: Style.spacing.controlHeight + 8
                 placeholderText: "Search packs…"
                 deleteConfirmId: root.deleteConfirmId
@@ -1674,7 +1561,7 @@ SoraDropdown {
           }
 
             Row {
-              visible: root.captureReady
+              visible: store.captureReady
               width: parent.width
               spacing: Style.space(8)
               Button {
@@ -1709,18 +1596,18 @@ SoraDropdown {
             }
 
           Row {
-            visible: root.captureReady
+            visible: store.captureReady
             width: parent.width
             spacing: Style.space(8)
             Button {
                 id: transportStop
                 width: (parent.width - Style.space(16)) / 3
-              text: root.running ? "Stop" : "Start"
+              text: store.running ? "Stop" : "Start"
               radius: root.friendlyRadius
               verticalPadding: root.buttonYPadding
               foreground: root.bar.foreground
               selected: true
-              onClicked: root.running ? root.stopDaemon() : root.startDaemon()
+              onClicked: store.running ? root.stopDaemon() : root.startDaemon()
             }
             Button {
                 id: transportRestart
@@ -1741,17 +1628,17 @@ SoraDropdown {
               verticalPadding: root.buttonYPadding
               foreground: root.bar.foreground
               selected: true
-              enabled: root.running && root.keyboardPacks.length > 1
+              enabled: store.running && store.keyboardPacks.length > 1
               onClicked: root.pickRandomPack()
             }
           }
 
-          PanelSeparator { visible: root.captureReady; foreground: root.bar.foreground }
+          PanelSeparator { visible: store.captureReady; foreground: root.bar.foreground }
 
           // typing test — the daemon listens system-wide, so physical
           // keystrokes while the panel is open play through this box
           Column {
-            visible: root.captureReady
+            visible: store.captureReady
             width: parent.width
             spacing: Style.space(6)
             PanelSectionHeader { text: "TEST TYPING"; foreground: root.bar.foreground }
