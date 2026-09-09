@@ -91,18 +91,11 @@ Panel {
   property real perPackVolume: 100
   // daemon health (explains "running but silent")
   property string inputError: ""
-  // first-reading tri-state: until `sorakey ctl status` answers once (or
+  // first-reading gate: until `sorakey ctl status` answers once (or
   // conclusively fails), we know nothing — neither the main controls nor
-  // the permission block may render, or the panel flashes main-then-ask
-  // for ~1-2s on fresh install. statusMissed bounds "Checking…" so a
-  // permanently dead daemon still resolves to a Start button.
+  // the permission block may render, or the panel flashes main-then-ask.
+  // A dead daemon resolves to the Start button via the failure branch.
   property bool statusKnown: false
-  property int statusMissed: 0
-  // A lone `input_error: null` is ambiguous: "scanned, all clear" or
-  // "daemon hasn't finished its first keyboard scan yet" (its startup
-  // answer is always null, error lands a beat later). So a clear reading
-  // needs a second consecutive confirm before it counts as knowledge.
-  property int clearStreak: 0
   property var packLoaded: null
   property string packError: ""
   property string audioError: ""
@@ -129,18 +122,21 @@ Panel {
   property string audioDeviceSelected: ""
   Timer { id: clearErrorToast; interval: 5000; onTriggered: root.errorToast = "" }
 
-  // post-install window: setup finished but no confirmed reading yet —
-  // show "Starting…" (expected, brief) instead of "Checking…" (ambiguous)
-  // so a fresh install never reads as stuck. Cleared only when knowledge
-  // is COMPLETE (status + packs), never on the first ambiguous answer.
-  property bool startingUp: false
-  // packs answered at least once: gates knowledge so the controls never
-  // paint stale defaults (100%, empty list) before the first real reading.
-  property bool packsKnown: false
+  // Dumb hold after install / daemon lifecycle change: show "Checking…"
+  // for a fixed 5s (max ~6s with poll jitter, always <7s) no matter what
+  // the daemon reports, then reveal truth. Replaces startingUp/packsKnown/
+  // clearStreak/statusMissed inference — the 5s window covers daemon spawn
+  // (~2s) + keyboard scan (~5s) + packs fetch, so no guessing is needed.
+  property bool installHold: false
+  Timer {
+    id: installHoldTimer
+    interval: 5000
+    onTriggered: { root.installHold = false }
+  }
   readonly property string statusText: {
     if (setupBusy) return "Installing…"
     if (!root.installed) return "Not installed"
-    if (root.startingUp) return "Starting…"
+    if (root.installHold) return "Checking…"
     if (!root.statusKnown) return "Checking…"
     if (!root.running) return "Stopped"
     if (root.inputError !== "") return "No keyboard access"
@@ -163,10 +159,8 @@ Panel {
 
   // Controls that only make sense once keys can be heard. Pack problems
   // are excluded on purpose: the pack picker is the remedy there.
-  // packsKnown gates the controls (never the WhyBlock banner): no pack
-  // list yet means no volume/picker/transport paint — that's the Image 1
-  // flash (100%, empty list, Start). Error/Start paths don't need packs.
-  readonly property bool captureReady: root.installed && root.statusKnown && root.packsKnown && root.inputError === ""
+  // (The installHold window hides these until packs arrive — no gate needed.)
+  readonly property bool captureReady: root.installed && root.statusKnown && root.inputError === ""
   // Shared control heights: default button padding is 6 (too tight),
   // Enable sits at 12 as the primary action; everything else uses 10.
   readonly property int buttonYPadding: Style.space(10)
@@ -264,18 +258,9 @@ Panel {
   }
 
   property bool setupBusy: false
-  property int setupRetries: 0 // bounded auto-retry on setup failure, then manual button
-  Timer {
-    id: setupRetryTimer
-    interval: 10000
-    onTriggered: {
-      // Re-arm the one-shot auto-install so the next check retries: a
-      // failed attempt (deleted files, network blip) must not lock the
-      // panel out of recovering on its own.
-      root.automaticSetupAttempted = false
-      if (!installCheck.running) installCheck.running = true
-    }
-  }
+  // auto-install attempts consumed (max 3, then manual Install button only).
+  // Manual taps never consume — the user always keeps an escape hatch.
+  property int setupRetries: 0
   property bool settingsOpen: false
   property bool uninstallArmed: false
   property bool uninstallBusy: false
@@ -303,10 +288,9 @@ Panel {
 
   function runService(args) {
     if (svcProc.running) return
-    // daemon state is about to change under us: the last reading is stale
-    root.statusKnown = false
-    root.statusMissed = 0
-    root.clearStreak = 0
+    // daemon state is about to change: hold Checking… 5s like an install.
+    root.installHold = true
+    installHoldTimer.restart()
     svcProc.command = ["systemctl", "--user"].concat(args)
     svcProc.running = true
   }
@@ -381,9 +365,8 @@ Panel {
     if (root.uninstallBusy || uninstallProc.running) return // never install mid-uninstall
     setupBusy = true
     root.statusKnown = false
-    root.statusMissed = 0
-    root.clearStreak = 0
-    root.packsKnown = false
+    root.installHold = true
+    installHoldTimer.restart()
     setupProc.command = ["/usr/bin/bash", root.setupPath]
     setupProc.running = true
   }
@@ -600,18 +583,6 @@ Panel {
     }
     if (o.ok === true) {
       var daemonJustUp = !root.running
-      // fresh-install hold: don't let the FIRST ambiguous answer end the
-      // Starting… window before packs arrive too — stale defaults (100%,
-      // empty list) would flash as Image 1. Re-fire packs; the next poll
-      // completes knowledge. Steady-state polls skip this (packsKnown set).
-      if (daemonJustUp && root.startingUp && !root.packsKnown) {
-        root.refreshPacks()
-      }
-      // any parseable answer proves the daemon is responsive…
-      if (root.statusMissed !== 0) root.statusMissed = 0
-      // …but a (re)started daemon hasn't scanned keyboards yet: forget
-      // any clear streak a previous incarnation earned
-      if (daemonJustUp) root.clearStreak = 0
       // guarded writes: identical poll answers must not fan out bindings at 1Hz
       if (root.running !== true) root.running = true
       if (root.installed !== true) root.installed = true
@@ -621,38 +592,20 @@ Panel {
       if (typeof o.per_pack_volume === "number" && root.perPackVolume !== o.per_pack_volume) root.perPackVolume = o.per_pack_volume
       var pack = String(o.keyboard_pack || "")
       if (root.keyboardPack !== pack) root.keyboardPack = pack
-      // health fields (absent on older daemons → keep previous value)
-      // input_error:null is ambiguous (all clear vs not scanned yet, see
-      // clearStreak). Errors are never ambiguous — the daemon only writes
-      // them on real failure — so they apply at once, while a clear
-      // reading needs a second consecutive confirm before it counts.
+      // health fields (absent on older daemons → keep previous value).
+      // Single-poll trust: the installHold window already covers the
+      // daemon's startup pre-scan lie, so no confirm counter is needed.
       var ie = (typeof o.input_error !== "undefined")
         ? (o.input_error ? String(o.input_error) : "")
         : root.inputError
       if (ie !== "") {
         if (root.inputError !== ie) root.inputError = ie
-        root.clearStreak = 0
-        // an error IS knowledge (daemon only writes real failures): WhyBlock
-        // shows immediately, no packs wait — the fix action needs no pack list.
-        if (!root.statusKnown) root.statusKnown = true
-        if (root.startingUp) root.startingUp = false
       } else {
-        // hold the previous verdict until the clear is confirmed: a lone
-        // null right after a (re)start is the pre-scan lie, and wiping a
-        // shown error on it would flash the main panel in steady state too
-        if (root.clearStreak < 2) root.clearStreak += 1
-        if (root.clearStreak >= 2) {
-          if (root.inputError !== "") root.inputError = ""
-          // ...and (fresh installs only) packs must have answered too, or
-          // the controls paint Image 1 (100%, empty list) for a beat
-          // before Image 2 lands. Steady state skips the wait (values
-          // already shown are the previous live ones, not defaults).
-          if (!root.statusKnown && (!root.startingUp || root.packsKnown)) {
-            root.statusKnown = true
-            if (root.startingUp) root.startingUp = false
-          }
-        }
+        if (root.inputError !== "") root.inputError = ""
       }
+      // During the hold, cache only — the timer owns the reveal, so no
+      // answer (clear or error) can end Checking… early and flash Image 1.
+      if (!root.installHold && !root.statusKnown) root.statusKnown = true
       if (typeof o.pack_loaded !== "undefined") {
         var pl = (o.pack_loaded === true) ? true : ((o.pack_loaded === false) ? false : null)
         if (root.packLoaded !== pl) root.packLoaded = pl
@@ -678,11 +631,8 @@ Panel {
       }
     } else {
       root.running = false
-      // daemon answered but not ok: that is still knowledge
-      root.clearStreak = 0
-      if (!root.statusKnown) root.statusKnown = true
-      if (root.startingUp) root.startingUp = false
-      if (root.statusMissed !== 0) root.statusMissed = 0
+      // daemon answered but not ok: cache it; the hold still owns the reveal.
+      if (!root.installHold && !root.statusKnown) root.statusKnown = true
     }
   }
 
@@ -708,8 +658,6 @@ Panel {
     root.audioDeviceSelected = id
     root.sendCtl({ cmd: "select_device", id: id === "" ? null : id })
   }
-
-  property bool automaticSetupAttempted: false
 
   Component.onCompleted: {
     installCheck.running = true
@@ -746,9 +694,12 @@ Panel {
       if (root.installed) {
         root.refreshStatus()
         root.refreshAudioDevices()
-      } else if (!root.automaticSetupAttempted && !setupBusy) {
-        root.automaticSetupAttempted = true
-        // Auto-run setup on first enable after URL install (like Spotify)
+      } else if (root.setupRetries < 3 && !setupBusy && !root.uninstallBusy && !uninstallProc.running) {
+        // Auto-run setup after URL install (like Spotify). Bounded at 3 —
+        // more failures mean something persistent; the manual Install
+        // button (unlimited) takes over. installCheck's 5s recheck plus
+        // this counter replace the old one-shot flag + retry timer.
+        root.setupRetries += 1
         Qt.callLater(function(){ root.install() })
       }
     }
@@ -761,27 +712,13 @@ Panel {
       if (exitCode === 0) {
         root.applyStatus(stdout.text)
       } else {
-        // Either not installed or stopped.
-        var o = Model.parseStatus(stdout.text)
-        if (o && o.ok === false) {
-          root.running = false
-          if (!root.statusKnown) root.statusKnown = true
-          if (root.startingUp) root.startingUp = false
-          if (root.statusMissed !== 0) root.statusMissed = 0
-        } else {
-          // unreadable answer (daemon mid-restart, socket gone): not
-          // knowledge yet — but don't wait forever, bound "Checking…"
-          // so a dead daemon still resolves to a Start button. The gap
-          // also voids the clear streak: the next answer may come from a
-          // fresh daemon still in its pre-scan window.
-          if (root.statusMissed < 3) root.statusMissed += 1
-          root.clearStreak = 0
-          if (root.statusMissed >= 3) {
-            root.running = false
-            if (root.startingUp) root.startingUp = false
-            if (!root.statusKnown) root.statusKnown = true
-          }
-        }
+        // Either not installed or stopped (daemon mid-restart, socket
+        // gone, or answered not-ok): down immediately. Lifecycle changes
+        // hold Checking… via installHold, so no bounding counter is
+        // needed — the hold covers the restart window, and a truly dead
+        // daemon resolves to the Start button on the next reveal.
+        root.running = false
+        if (!root.installHold && !root.statusKnown) root.statusKnown = true
       }
     }
     stdout: StdioCollector { waitForEnd: true }
@@ -797,10 +734,6 @@ Panel {
       }
       var p = Model.parsePacks(stdout.text)
       root.keyboardPacks = p.keyboard
-      // ponytail: empty list is not knowledge — one length check; installer
-      // guarantees >=1 pack so a legit-empty hold can't stick. Upgrade to
-      // schema validation if packs ever gain required fields.
-      if (!root.packsKnown && p.keyboard.length > 0) root.packsKnown = true
       if (root.deleting) {
         root.deleting = false
         root.deleteConfirmId = ""
@@ -810,21 +743,6 @@ Panel {
   }
 
   // Audio output devices
-  property int devRetries: 0
-  Timer {
-    id: devRetryTimer
-    interval: 600
-    onTriggered: {
-      if (root.devRetries < 3) {
-        root.devRetries += 1
-        root.refreshAudioDevices()
-      } else {
-        root.devRetries = 0
-        root.errorToast = "Device refresh failed"
-        clearErrorToast.restart()
-      }
-    }
-  }
   Process {
     id: devicesProc
     command: [root.sorakeyBin, "ctl", "{\"cmd\":\"audio_devices\"}"]
@@ -841,16 +759,11 @@ Panel {
         devs = null
       }
       if (!devs || devs.length === 0) {
-        // daemon not ready yet (fresh install / mid-restart): stay silent —
-        // a later poll refreshes. Toasting here is what flashed
+        // Stay silent and keep the existing list: daemonJustUp, panel-open
+        // and Rescan re-fire this. The old 3× retry + toast is what flashed
         // "Device refresh failed" on healthy installs.
-        if (!root.statusKnown || root.setupBusy || root.startingUp) return
-        // failed/empty fetch: retry a few times (daemon may be mid-restart),
-        // keep the existing list instead of wiping it
-        devRetryTimer.restart()
         return
       }
-      root.devRetries = 0
       // normalize to [{value,label}] + prepend System default
       var opts = devs.map(function(d){ return { value: String(d.id), label: String(d.name) } })
       opts.unshift({ value: "", label: "System default" })
@@ -969,21 +882,19 @@ Panel {
         root.errorToast = ""
         root.setupRetries = 0
         root.statusKnown = false
-        root.statusMissed = 0
-        root.clearStreak = 0
-        root.startingUp = true
+        // 5s Checking… starts now: covers daemon spawn + scan + packs.
+        root.installHold = true
+        installHoldTimer.restart()
         root.refreshStatus()
         root.refreshPacks()
         root.refreshAudioDevices()
       } else {
         // Surface the failure instead of silently staying "Not installed".
+        // No auto-retry here: installCheck's counter (max 3) already
+        // re-arms it; manual Install taps stay unlimited.
         var msg = err !== "" ? err.split("\n").pop() : (out !== "" ? out.split("\n").pop() : "Install failed.")
         root.errorToast = root.shortText(msg)
         clearErrorToast.restart()
-        if (root.setupRetries < 3 && !root.uninstallBusy && !uninstallProc.running) {
-          root.setupRetries += 1
-          setupRetryTimer.restart()
-        }
         installCheck.running = true
       }
     }
@@ -1461,11 +1372,11 @@ SoraDropdown {
           }
         }
 
-        // first-reading placeholder: until `sorakey ctl status` answers we
-        // know nothing — show this instead of guessing main vs permission,
-        // so fresh installs never flash the main panel before the ask.
+        // Checking placeholder: shown instead of guessing main vs
+        // permission, so fresh installs never flash Image 1 before truth.
+        // The installHold window keeps it up for a fixed 5s after install.
         Item {
-          visible: root.installed && !root.statusKnown && !root.settingsOpen
+          visible: root.installed && (root.installHold || !root.statusKnown) && !root.settingsOpen
           width: parent.width
           implicitHeight: checkingRow.implicitHeight
           Row {
@@ -1487,7 +1398,7 @@ SoraDropdown {
             }
             Text {
               id: checkingText
-              text: root.startingUp ? "Starting…" : "Checking…"
+              text: "Checking…"
               color: root.bar.foreground
               opacity: 0.85
               font.family: root.bar.fontFamily
@@ -1498,9 +1409,10 @@ SoraDropdown {
           }
         }
 
-        // controls — gated by knowledge: while Checking, only the placeholder above shows
+        // controls — gated by knowledge AND hold: while Checking (hold or
+        // unknown), only the placeholder above shows
         Column {
-          visible: root.installed && root.statusKnown && !root.settingsOpen
+          visible: root.installed && !root.installHold && root.statusKnown && !root.settingsOpen
           width: parent.width
           spacing: Style.space(14)
 

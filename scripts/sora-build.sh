@@ -31,7 +31,7 @@ mkdir -p "$CACHE_DIR" "$LIB_DIR" "$(dirname "$BIN")"
 # but stormy. The second runner waits on the lock instead, capped at 90s:
 # a prebuilt fetch can legitimately take ~2 min (120s curl), but an
 # indefinite stall (dead holder, stale lock) is worse than a loud skip —
-# the caller retries (auto: bounded setupRetries; manual: unlimited taps).
+# the caller retries (auto: max 3 attempts; manual Install taps unlimited).
 # (No exec here: the fallback message must run in THIS shell after flock
 # times out. Missing flock degrades to unlocked rather than failing.)
 # ponytail: -w 90, not infinite flock — ceiling is one skipped-then-retried
