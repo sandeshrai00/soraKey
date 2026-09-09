@@ -2,10 +2,11 @@
 # sora-build.sh — prebuilt-only daemon install + bundled-pack sync.
 #
 # Policy: user machines NEVER compile. The daemon binary comes exclusively
-# from the rolling `continuous` GitHub release, and only when that release
-# records the byte-identical source this tree holds (content-hash match, not
-# tag position — tags can move while assets stay stale). No match = hard
-# failure with a reason, never a local cargo build.
+# from the versioned `v<manifest.json:version>` GitHub release, and only
+# when that release records the byte-identical source this tree holds
+# (content-hash match). No match = hard failure with a reason, never a
+# local cargo build. There is no rolling release: between a daemon change
+# and its version tag, installs block until the tag is published.
 #
 # Test hooks (never set in production):
 #   SORAKEY_RELEASE_BASE=file:///path/to/fake-release  — fetch fixtures
@@ -19,7 +20,10 @@ TARGET_DIR="$CACHE_DIR/target"
 LIB_DIR="$HOME/.local/lib/sorakey"
 BIN="$HOME/.local/bin/sorakey"
 REPO="sandeshrai00/soraKey"
-RELEASE_BASE="${SORAKEY_RELEASE_BASE:-https://github.com/$REPO/releases/download/continuous}"
+RELEASE_DOWNLOAD_BASE="https://github.com/$REPO/releases/download"
+# RELEASE_BASE is computed after the version parse below (needs $version).
+# Env override wins (file:// fixtures for tests).
+RELEASE_BASE="${SORAKEY_RELEASE_BASE:-}"
 SHARE="$HOME/.local/share/sorakey"
 STAMP="$SHARE/.bundled-packs"
 
@@ -107,6 +111,12 @@ if [[ -z "$cargo_version" || "$cargo_version" != "$version" ]]; then
   echo "sora-build: manifest ($version) != daemon Cargo.toml (${cargo_version:-unreadable}) — refusing to install from an inconsistent tree" >&2
   exit 1
 fi
+# Version-pinned release: the installer trusts ONLY the release tagged
+# v$version. Set after the parse above (needs $version); file:// override
+# bypasses it for fixture tests.
+if [[ -z "$RELEASE_BASE" ]]; then
+  RELEASE_BASE="$RELEASE_DOWNLOAD_BASE/v$version"
+fi
 arch="$(uname -m)"
 case "$arch" in x86_64|aarch64) ;; *) arch="x86_64";; esac
 asset="sorakey-${arch}"
@@ -165,8 +175,8 @@ fail_no_prebuilt() {
   # $1 = reason line. The contract: explain which side is wrong and what
   # to do. Never fall through to a compile — user machines have no toolchain
   # by design, and a silent wrong binary is worse than a loud refusal.
-  echo "sora-build: no prebuilt for source ${source_id:0:12} — $1" >&2
-  echo "sora-build: Sorakey never builds from source on your machine. Update the plugin (fresh commits need ~10 min for CI to publish), then retry." >&2
+  echo "sora-build: no prebuilt for source ${source_id:0:12} (want v$version) — $1" >&2
+  echo "sora-build: Sorakey never builds from source. If daemon/ changed since v$version, the maintainer must tag v$version (or next bump); otherwise wait ~5-8 min for CI to publish it, then retry." >&2
   exit 1
 }
 
@@ -177,8 +187,8 @@ try_download_prebuilt() {
   local hash_code hash_file="$tmp/source.sha256"
   read -r hash_code _ < <(fetch_release_file "source.sha256" "$hash_file")
   case "$hash_code" in
-    000) fail_no_prebuilt "cannot reach the prebuilt release (no network, or no continuous release published yet)" ;;
-    404) fail_no_prebuilt "release has no source record yet (CI still building main?)" ;;
+    000) fail_no_prebuilt "cannot reach release v$version (no network, or tag v$version not yet pushed/published)" ;;
+    404) fail_no_prebuilt "release v$version has no source record yet (CI still building the tag? check https://github.com/$REPO/actions)" ;;
     200) ;;
     *) fail_no_prebuilt "source-record download failed (HTTP $hash_code)" ;;
   esac
@@ -188,9 +198,9 @@ try_download_prebuilt() {
     fail_no_prebuilt "release source record is empty — CI artifact corrupt, report this"
   fi
   if [[ "$built_source" != "$source_id" ]]; then
-    # Either side can be newer: local commits/CI lag, or (stale-asset bug
-    # class) a release that predates this source. Both refuse loudly.
-    fail_no_prebuilt "source mismatch (local ${source_id:0:12} != built ${built_source:0:12}) — local edits can never match (commit+push and wait for CI), otherwise wait for CI to publish this source"
+    # This checkout's daemon/ differs from what v$version published: either
+    # local edits, or daemon/ moved after the tag. Both refuse loudly.
+    fail_no_prebuilt "source mismatch (local ${source_id:0:12} != built ${built_source:0:12}) — maintainer must retag/bump for this source; local edits can never match a published release"
   fi
   echo "Trying verified prebuilt $RELEASE_BASE/$asset ..."
   local url_code sums_code

@@ -1,16 +1,13 @@
 name: release-sorakey
 on:
   push:
-    branches: ["main"]
-    # Compiled inputs only: QML/JS/docs/scripts ship straight from the git
-    # clone, and sora-build.sh hashes daemon/** + rust-toolchain.toml only —
-    # so a QML-only push would rebuild and overwrite `continuous` with a
-    # byte-identical source.sha256 (~20 billed min wasted). Add any NEW
-    # compiled input's path here or its pushes silently won't build.
-    paths: ["daemon/**", "rust-toolchain.toml", ".github/workflows/release.yml"]
-    tags: ["v*"] # versioned tags always build (pipeline runs on the tag push)
-# Rapid pushes cancel the still-queuing build — only the newest commit's
-# prebuilt lands in `continuous`. Saves another 10-20 min on push bursts.
+    # Manual versioned tags only — no auto-build on main. Every daemon
+    # change must be followed by a bump + `git tag vX.Y.Z` or installs
+    # block until the tag exists (prebuilt-only policy, no fallback).
+    tags: ["v*"]
+  # Manual re-run escape hatch (Actions → release-sorakey → Run workflow):
+  # re-runs checks on main without publishing. Publishing still needs a tag.
+  workflow_dispatch:
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
@@ -34,9 +31,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Validate release identity
-        # Versioned tags only: on main pushes ref_name is "main" and there
-        # is no tag to compare — the rolling release needs no version check.
-        if: startsWith(github.ref, 'refs/tags/')
+        # Every remaining trigger IS a tag: tag must == manifest ==
+        # daemon/Cargo.toml version, toolchain must be 1.87. Always enforced.
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
@@ -115,34 +111,3 @@ jobs:
             dist/source.sha256
             dist/SHA256SUMS
           generate_release_notes: true
-  rolling:
-    # Every main commit publishes the prebuilt the installer actually uses.
-    # Users never compile: without this, any commit past the last versioned
-    # release would be uninstallable under the prebuilt-only policy.
-    needs: build
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Download artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          path: dist
-      - name: Merge SHA256SUMS
-        run: |
-          cat dist/sorakey-*/SHA256SUMS-x86_64 dist/sorakey-*/SHA256SUMS-aarch64 > dist/SHA256SUMS
-          sed -i 's|dist/||g' dist/SHA256SUMS
-          sort -u -o dist/SHA256SUMS dist/SHA256SUMS
-          cat dist/SHA256SUMS
-          cat dist/sorakey-x86_64/source.sha256
-      - name: Update continuous prebuilt
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          tag_name: continuous
-          name: "Latest prebuilt (main)"
-          body: "Rolling prebuilt for the current main commit. The installer matches it by source hash, never by tag position."
-          files: |
-            dist/sorakey-x86_64/sorakey-x86_64
-            dist/sorakey-aarch64/sorakey-aarch64
-            dist/sorakey-x86_64/source.sha256
-            dist/SHA256SUMS

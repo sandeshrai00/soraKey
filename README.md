@@ -95,14 +95,15 @@ omarchy plugin update io.github.sandeshrai00.sorakey --yes
 ```
 
 The QML updates in place. If the daemon source changed, the next shell start
-(or plugin reload) re-runs the installer — it downloads the CI prebuilt for
-that exact source (matched by content hash, never by tag) and restarts the
-daemon automatically. There is no source build on your machine: if no
-prebuilt matches yet (fresh commit, CI still building ~10 min), the panel
-shows the reason and keeps the current binary. Bundled soundpacks re-sync
-the same way (changed packs refresh, removed packs disappear, your imported
-packs are never touched) and the panel shows a "Soundpacks updated" toast
-when it happens.
+(or plugin reload) re-runs the installer — it downloads the CI prebuilt from
+the versioned `vX.Y.Z` release matching that exact source (content hash) and
+restarts the daemon automatically. There is no source build and no rolling
+release on your machine: between a daemon change and its version tag there
+is no prebuilt, so the panel shows the reason and keeps the current binary
+until the maintainer tags the version (~5-8 min for CI to publish the tag).
+Bundled soundpacks re-sync the same way (changed packs refresh, removed
+packs disappear, your imported packs are never touched) and the panel shows
+a "Soundpacks updated" toast when it happens.
 
 ## Remove
 
