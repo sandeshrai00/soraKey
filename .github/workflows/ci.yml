@@ -4,8 +4,18 @@ name: sorakey-ci
 on:
   push:
     branches: ["main"]
+    # Compiled inputs only (mirrors release.yml): QML/JS/docs/scripts ship
+    # straight from the git clone, so running cargo here on a widget tweak
+    # burns ~3-5 billed min for zero signal. Add any NEW compiled input's
+    # path here or its pushes silently skip CI.
+    paths: ["daemon/**", "rust-toolchain.toml", "daemon/Cargo.lock", ".github/workflows/ci.yml"]
   pull_request:
     branches: ["main"]
+    paths: ["daemon/**", "rust-toolchain.toml", "daemon/Cargo.lock", ".github/workflows/ci.yml"]
+# Burst pushes cancel the queued run — only the newest commit is checked.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   check:
     runs-on: ubuntu-latest
