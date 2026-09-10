@@ -952,7 +952,7 @@ Panel {
             spacing: Style.space(2)
 
             Text {
-              text: "Sorakeys"
+              text: "Sorakeys test"
               color: root.heroMatchTheme ? Color.accent : root.bar.foreground
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.title
