@@ -310,7 +310,7 @@ Panel {
   function doUpdate() {
     if (root.updateBusy) return
     root.updateBusy = true
-    root.updateStatus = "Update started — watch for the notification."
+    root.updateStatus = "Updating…"
     Quickshell.execDetached(["/usr/bin/bash", root.pluginDir + "/scripts/sorakey-detached",
       root.home + "/.cache/sorakey/update-result",
       "/usr/bin/bash", root.pluginDir + "/scripts/sora-update.sh",

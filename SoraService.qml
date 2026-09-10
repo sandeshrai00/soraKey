@@ -31,8 +31,13 @@ Item {
   // destroys and recreates THIS service — so the baseline lives on disk
   // (session-head, also written by scripts/sora-update.sh before its
   // restart). One bash pass per tick: read HEAD + stamp, compare, and
-  // re-stamp on change; QML only reacts to a "PENDING" verdict.
+  // re-stamp on change (also dropping a pending-update marker for the
+  // post-restart confirmation); QML only reacts to a "PENDING" verdict.
   readonly property string headStampFile: Quickshell.env("HOME") + "/.local/share/sorakey/session-head"
+  // epoch-seconds marker written right before an update-driven restart
+  // (by the watchdog above or scripts/sora-update.sh); the updateNotice
+  // check below turns a fresh one into the "Now running vX · commit" toast.
+  readonly property string updateNoticeFile: Quickshell.env("HOME") + "/.local/share/sorakey/pending-update"
   // sticky stop: true if the user explicitly stopped the daemon (Panel writes the flag).
   // NOTE: Qt has no fileExists() — the previous readonly binding silently
   // evaluated false forever, auto-starting the daemon after every user Stop.
@@ -245,6 +250,15 @@ Item {
       ' else echo "$k"; fi; fi; done',
       "_", root.pickCacheDir]
     resumePoll.running = true
+    // post-update confirmation: a fresh pending-update marker means this
+    // shell boot is the other side of an update-driven restart
+    updateNotice.command = ["/usr/bin/bash", "-c",
+      'n="$1";' +
+      ' if [ -f "$n" ] && [ -z "$(find "$n" -mmin +10 2>/dev/null)" ]; then' +
+      ' git -C "$2" rev-parse --short HEAD 2>/dev/null; fi;' +
+      ' rm -f -- "$n"',
+      "_", root.updateNoticeFile, root.pluginDir]
+    updateNotice.running = true
   }
 
   Process {
@@ -319,7 +333,7 @@ Item {
       var line = String(stdout.text || "").trim().split("\n").pop()
       if (line.indexOf("PENDING ") !== 0) return
       console.info("sorakey watchdog: pending plugin update -> " + line.slice(8, 15) + ", restarting shell")
-      root.notify("Sorakey updated", "Restarting shell to apply changes…")
+      root.notify("Sorakey updating", "Applying update — the bar restarts for a moment.")
       Quickshell.execDetached(["setsid", "omarchy", "restart", "shell"])
     }
   }
@@ -332,14 +346,29 @@ Item {
     onTriggered: {
       if (headCheck.running) return
       headCheck.command = ["/usr/bin/bash", "-c",
-        'p="$1"; s="$2";' +
+        'p="$1"; s="$2"; n="$3";' +
         ' head=$(git -C "$p" rev-parse HEAD 2>/dev/null) || exit 0;' +
         ' stamped=$(cat "$s" 2>/dev/null);' +
         ' if [ -z "$stamped" ]; then mkdir -p "$(dirname "$s")"; echo "$head" > "$s"; echo CLEAN;' +
-        ' elif [ "$stamped" != "$head" ]; then echo "$head" > "$s"; echo "PENDING $head";' +
+        ' elif [ "$stamped" != "$head" ]; then mkdir -p "$(dirname "$n")"; echo "$head" > "$s"; date +%s > "$n"; echo "PENDING $head";' +
         ' else echo CLEAN; fi',
-        "_", root.pluginDir, root.headStampFile]
+        "_", root.pluginDir, root.headStampFile, root.updateNoticeFile]
       headCheck.running = true
+    }
+  }
+
+  // Post-update confirmation: after an update-driven shell restart, tell
+  // the user what's now running — the "real update" finish line. A stale
+  // marker means the restart never happened (e.g. refused while locked),
+  // so it's removed silently.
+  Process {
+    id: updateNotice
+    stdout: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      var commit = String(stdout.text || "").trim()
+      if (exitCode !== 0 || commit === "") return
+      var version = root.manifest && root.manifest.version ? "v" + root.manifest.version + " · " : ""
+      root.notify("Sorakey updated", "Now running " + version + commit + ".")
     }
   }
 
