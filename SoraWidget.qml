@@ -303,7 +303,19 @@ Panel {
     stopFlagProc.command = ["rm", "-f", root.home + "/.local/share/sorakey/stopped"]
     stopFlagProc.running = true
   }
-  function doUpdate() { if (root.updateBusy) return; root.updateBusy=true; root.updateStatus="Updating…"; updateProc.running=true }
+  // Double-forked via sorakey-detached: as a direct child of a Process here
+  // it would be SIGTERMed by the reload the merge itself triggers. Feedback
+  // arrives as a desktop notification; a real update ends in a shell restart
+  // that replaces this panel with the new code.
+  function doUpdate() {
+    if (root.updateBusy) return
+    root.updateBusy = true
+    root.updateStatus = "Update started — watch for the notification."
+    Quickshell.execDetached(["/usr/bin/bash", root.pluginDir + "/scripts/sorakey-detached",
+      root.home + "/.cache/sorakey/update-result",
+      "/usr/bin/bash", root.pluginDir + "/scripts/sora-update.sh",
+      root.home + "/.cache/sorakey/update-result"])
+  }
 
   function install() {
     if (setupBusy) return
@@ -464,35 +476,10 @@ Panel {
     }
   }
 
-  // sora-update.sh does the git update and, on a real update, detaches
-  // `omarchy restart shell` — a QML-side timer can't: the update's own file
-  // rewrite triggers the shell hot reload, which can destroy this panel
-  // before a pending restart timer fires (hot reload never replaces the
-  // live bar-widget instance; only a new shell process renders new QML).
-  Process {
-    id: updateProc
-    command: ["/usr/bin/bash", root.pluginDir + "/scripts/sora-update.sh"]
-    stdout: StdioCollector { waitForEnd: true }
-    stderr: StdioCollector { waitForEnd: true }
-    onExited: function(exitCode) {
-      root.updateBusy = false
-      var err = String(stderr.text || "").trim()
-      var lines = String(stdout.text || "").trim().split("\n").filter(function(l) { return l.trim() !== "" })
-      var line = lines.length > 0 ? lines[lines.length - 1] : ""
-      if (exitCode === 0) {
-        root.updateStatus = line === "restarting-shell" ? "Updated — restarting shell…" : (line !== "" ? line : "Updated Sorakey.")
-      }
-      else root.updateStatus = err !== "" ? err : "Update failed."
-      clearUpdateTimer.restart()
-    }
-  }
-
-
-
   Timer {
     id: clearUpdateTimer
     interval: 5000
-    onTriggered: root.updateStatus = ""
+    onTriggered: { root.updateStatus = ""; root.updateBusy = false }
   }
 
   // auto-select imported pack
