@@ -26,6 +26,14 @@ Item {
   property string lastExportError: ""
   property string lastSyncResult: ""
   property string lastBuildError: ""
+  // Update watchdog: plugin git HEAD stamped when this service session
+  // started. If it changes while the shell is alive, the running QML is
+  // stale bytecode (the shell never invalidates its in-memory component on
+  // hot reload) and only a shell restart renders the new code. The logic is
+  // version-agnostic, so even older bytecode containing it still fires —
+  // every mid-session update path self-heals within one tick.
+  property string sessionHead: ""
+  property int restartPending: 0 // 0=idle; 1=notify+restart fired; retries every 5 ticks
   // sticky stop: true if the user explicitly stopped the daemon (Panel writes the flag).
   // NOTE: Qt has no fileExists() — the previous readonly binding silently
   // evaluated false forever, auto-starting the daemon after every user Stop.
@@ -300,6 +308,45 @@ Item {
         root.notify("Soundpacks updated", line)
       }
       Quickshell.execDetached(["systemctl", "--user", "restart", "sorakey"])
+    }
+  }
+
+  // --------------------------------------------------- update watchdog
+  Process {
+    id: headCheck
+    stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      var head = String(stdout.text || "").trim()
+      if (exitCode !== 0 || head === "") return // no .git (non-git install) — nothing to watch
+      if (root.sessionHead === "") {
+        root.sessionHead = head
+        return
+      }
+      if (head !== root.sessionHead) {
+        if (root.restartPending === 0) {
+          console.info("sorakey watchdog: plugin HEAD changed " +
+            root.sessionHead.slice(0, 7) + " -> " + head.slice(0, 7) + ", restarting shell")
+          root.notify("Sorakey updated", "Restarting shell to apply changes…")
+        }
+        root.restartPending += 1
+        // first detection restarts; if that attempt is refused (locked
+        // session) or otherwise fails, retry every 5 ticks (~2.5 min).
+        if (root.restartPending === 1 || root.restartPending % 5 === 0)
+          Quickshell.execDetached(["setsid", "omarchy", "restart", "shell"])
+      }
+    }
+  }
+
+  Timer {
+    id: headTimer
+    interval: 30000
+    repeat: true
+    running: true
+    onTriggered: {
+      if (headCheck.running) return
+      headCheck.command = ["/usr/bin/git", "-C", root.pluginDir, "rev-parse", "HEAD"]
+      headCheck.running = true
     }
   }
 

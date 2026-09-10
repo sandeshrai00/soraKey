@@ -22,6 +22,7 @@ if [[ -n $out ]]; then
 fi
 
 if [[ $rc -eq 0 && $out == *"Updated "* ]]; then
+  notify-send -a Sorakey "Sorakey updated" "Restarting shell to apply changes…" || true
   setsid omarchy restart shell >/dev/null 2>&1 &
   echo "restarting-shell"
 fi
