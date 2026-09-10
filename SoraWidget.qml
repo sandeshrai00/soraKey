@@ -471,10 +471,30 @@ Panel {
     onExited: function(exitCode) {
       root.updateBusy = false
       var err = String(stderr.text || "").trim()
-      if (exitCode === 0) root.updateStatus = String(stdout.text || "").trim().split("\n").pop().replace(root.pluginId, "Sorakey")
+      var line = String(stdout.text || "").trim().split("\n").pop()
+      if (exitCode === 0) {
+        var updated = line.indexOf("Updated") === 0
+        root.updateStatus = updated ? "Updated — restarting shell…" : line.replace(root.pluginId, "Sorakey")
+        // Hot reload keeps the live bar-widget instance stale; only a full
+        // shell restart renders the new QML, so restart after real updates.
+        if (updated) restartShellTimer.start()
+      }
       else root.updateStatus = err !== "" ? err : "Update failed."
       clearUpdateTimer.restart()
     }
+  }
+
+  Timer {
+    id: restartShellTimer
+    interval: 800
+    onTriggered: restartProc.running = true
+  }
+
+  Process {
+    id: restartProc
+    command: ["setsid", "omarchy", "restart", "shell"]
+    stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector { waitForEnd: true }
   }
 
 
