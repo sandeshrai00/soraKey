@@ -303,7 +303,7 @@ Panel {
     stopFlagProc.command = ["rm", "-f", root.home + "/.local/share/sorakey/stopped"]
     stopFlagProc.running = true
   }
-  function doUpdate() { if (root.updateBusy) return; root.updateBusy=true; root.updateStatus="Updating…"; updateProc.command=["omarchy","plugin","update",root.pluginId,"--yes"]; updateProc.running=true }
+  function doUpdate() { if (root.updateBusy) return; root.updateBusy=true; root.updateStatus="Updating…"; updateProc.running=true }
 
   function install() {
     if (setupBusy) return
@@ -464,37 +464,27 @@ Panel {
     }
   }
 
+  // sora-update.sh does the git update and, on a real update, detaches
+  // `omarchy restart shell` — a QML-side timer can't: the update's own file
+  // rewrite triggers the shell hot reload, which can destroy this panel
+  // before a pending restart timer fires (hot reload never replaces the
+  // live bar-widget instance; only a new shell process renders new QML).
   Process {
     id: updateProc
+    command: ["/usr/bin/bash", root.pluginDir + "/scripts/sora-update.sh"]
     stdout: StdioCollector { waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
     onExited: function(exitCode) {
       root.updateBusy = false
       var err = String(stderr.text || "").trim()
-      var line = String(stdout.text || "").trim().split("\n").pop()
+      var lines = String(stdout.text || "").trim().split("\n").filter(function(l) { return l.trim() !== "" })
+      var line = lines.length > 0 ? lines[lines.length - 1] : ""
       if (exitCode === 0) {
-        var updated = line.indexOf("Updated") === 0
-        root.updateStatus = updated ? "Updated — restarting shell…" : line.replace(root.pluginId, "Sorakey")
-        // Hot reload keeps the live bar-widget instance stale; only a full
-        // shell restart renders the new QML, so restart after real updates.
-        if (updated) restartShellTimer.start()
+        root.updateStatus = line === "restarting-shell" ? "Updated — restarting shell…" : (line !== "" ? line : "Updated Sorakey.")
       }
       else root.updateStatus = err !== "" ? err : "Update failed."
       clearUpdateTimer.restart()
     }
-  }
-
-  Timer {
-    id: restartShellTimer
-    interval: 800
-    onTriggered: restartProc.running = true
-  }
-
-  Process {
-    id: restartProc
-    command: ["setsid", "omarchy", "restart", "shell"]
-    stdout: StdioCollector { waitForEnd: true }
-    stderr: StdioCollector { waitForEnd: true }
   }
 
 
