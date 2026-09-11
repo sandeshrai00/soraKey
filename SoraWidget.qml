@@ -1239,7 +1239,7 @@ SoraDropdown {
               visible: root.updateAvailable
               width: parent.width - Style.space(24)
               anchors.horizontalCenter: parent.horizontalCenter
-              text: root.updateBusy ? "Updating…" : (root.checkResult === "ready" ? "Apply Update" : "Update Sorakey")
+              text: root.updateBusy ? "Updating…" : "Click to Update"
               iconText: "󰮭"
               radius: root.friendlyRadius
               iconSpinning: root.updateBusy

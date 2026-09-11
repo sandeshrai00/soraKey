@@ -63,6 +63,11 @@ sync_soundpacks() {
   [[ -d "$src_dir" ]] || { echo "soundpacks sync warning: $src_dir missing" >&2; return 0; }
   mkdir -p "$SHARE/soundpacks/keyboard"
   local updated=0 removed=0
+  # First run (no stamp yet) is the initial state, not a sync event: the
+  # installer's own "N keyboard pack(s) installed" line covers it, so the
+  # (N updated, M removed) bookkeeping stays silent until a real change.
+  local first_run=0
+  [[ -f "$STAMP" ]] || first_run=1
   local stamp_tmp; stamp_tmp=$(mktemp)
   trap 'rm -f "$stamp_tmp"' RETURN
   local src id dst
@@ -91,7 +96,7 @@ sync_soundpacks() {
     done < "$STAMP" || true
   fi
   mv "$stamp_tmp" "$STAMP"
-  if [[ "$updated" != 0 || "$removed" != 0 ]]; then
+  if (( first_run == 0 )) && [[ "$updated" != 0 || "$removed" != 0 ]]; then
     packs_changed=1
     SYNC_LINE="soundpacks synced ($updated updated, $removed removed)"
   fi
