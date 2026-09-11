@@ -4,12 +4,14 @@
 # Process would be SIGTERMed by the reload its own merge triggers.
 # $1 = optional result file (sorakey-detached contract: append one line).
 #
-# Flow: git update -> "applying" notification -> pending-update marker
-# (SoraService turns it into the post-restart confirmation) -> detached
-# `omarchy restart shell`. The running shell's hot reload never replaces the
-# live bar-widget instance, so the restart IS the apply step. The post-merge
-# HEAD also goes into the watchdog stamp so the reload-recreated service
-# doesn't double-fire.
+# Single brain for applying: run the official `omarchy plugin update`
+# (fetch + fast-forward merge + validate + auto-rollback), then decide —
+# HEAD ahead of the version stamp means the running shell is stale (a fresh
+# merge OR a terminal update already on disk), so restart; otherwise report
+# up to date. The running shell's hot reload never replaces the live
+# bar-widget instance, so the restart IS the apply step.
+# SORAKEY_UPDATE_NO_RESTART=1 skips the actual restart (test seam): stamp,
+# marker and result still happen so tests can verify the decision.
 set -uo pipefail
 result="${1:-}"
 id="io.github.sandeshrai00.sorakey"
@@ -18,20 +20,25 @@ data_dir="$HOME/.local/share/sorakey"
 stamp="$data_dir/session-head"
 notice="$data_dir/pending-update"
 
-notify() { notify-send -a Sorakey "$1" "$2" 2>/dev/null || true; }
+notify() { omarchy-notification-send --app-name Sorakey "$1" "$2" 2>/dev/null || true; }
+restart_shell() {
+  [[ "${SORAKEY_UPDATE_NO_RESTART:-}" == "1" ]] && return 0
+  setsid omarchy restart shell >/dev/null 2>&1 &
+}
 
 rc=0
 out=$(omarchy plugin update "$id" --yes 2>&1) || rc=$?
 last=$(printf '%s\n' "$out" | tail -n 1)
 [[ -n $out ]] && printf '%s\n' "${out//$id/Sorakey}"
 
-if [[ $rc -eq 0 && $out == *"Updated "* ]]; then
+head=$(git -C "$plugin_dir" rev-parse HEAD 2>/dev/null || true)
+stamped=$(cat "$stamp" 2>/dev/null || true)
+if [[ -n $head && $head != "$stamped" ]]; then
   mkdir -p "$data_dir"
-  head=$(git -C "$plugin_dir" rev-parse HEAD 2>/dev/null || true)
-  [[ -n $head ]] && echo "$head" > "$stamp"
+  echo "$head" > "$stamp"
   date +%s > "$notice"
   notify "Sorakey updating" "Applying update — the bar restarts for a moment."
-  setsid omarchy restart shell >/dev/null 2>&1 &
+  restart_shell
   [[ -n $result ]] && printf 'OK: updating\n' >> "$result"
 elif [[ $rc -eq 0 ]]; then
   msg="${last//$id/Sorakey}"

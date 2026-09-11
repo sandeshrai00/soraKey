@@ -26,17 +26,17 @@ Item {
   property string lastExportError: ""
   property string lastSyncResult: ""
   property string lastBuildError: ""
-  // Update watchdog: the shell compiles plugin QML once and never
-  // invalidates it on hot reload, and the reload an update triggers also
-  // destroys and recreates THIS service — so the baseline lives on disk
-  // (session-head, also written by scripts/sora-update.sh before its
-  // restart). One bash pass per tick: read HEAD + stamp, compare, and
-  // re-stamp on change (also dropping a pending-update marker for the
-  // post-restart confirmation); QML only reacts to a "PENDING" verdict.
+  // Boot baseline for staleness decisions: the shell compiles plugin QML
+  // once and never invalidates it on hot reload, so "which commit is the
+  // running shell showing" is tracked on disk. scripts/sora-update.sh
+  // writes it before its restart; the startup pass below re-stamps after
+  // any unrelated restart (a mismatch there means the update is already
+  // applied, so it only normalizes — never restarts); the panel's Check
+  // for Update compares it to decide CURRENT/READY.
   readonly property string headStampFile: Quickshell.env("HOME") + "/.local/share/sorakey/session-head"
   // epoch-seconds marker written right before an update-driven restart
-  // (by the watchdog above or scripts/sora-update.sh); the updateNotice
-  // check below turns a fresh one into the "Now running vX · commit" toast.
+  // (by scripts/sora-update.sh); the updateNotice check below turns a
+  // fresh one into the "Now running vX · commit" toast.
   readonly property string updateNoticeFile: Quickshell.env("HOME") + "/.local/share/sorakey/pending-update"
   // sticky stop: true if the user explicitly stopped the daemon (Panel writes the flag).
   // NOTE: Qt has no fileExists() — the previous readonly binding silently
@@ -45,7 +45,7 @@ Item {
   property bool stoppedFlag: false
 
   signal packsImported(string packId)
-  function notify(title, msg) { Quickshell.execDetached(["notify-send","-a","Sorakey", title, msg]); clearImportTimer.restart() }
+  function notify(title, msg) { Quickshell.execDetached(["omarchy-notification-send","--app-name","Sorakey", title, msg]); clearImportTimer.restart() }
 
   // Detached pickers (reload-proof): the file dialog used to run as a
   // direct child of this service, and every plugin reload ("Local plugin
@@ -251,13 +251,20 @@ Item {
       "_", root.pickCacheDir]
     resumePoll.running = true
     // post-update confirmation: a fresh pending-update marker means this
-    // shell boot is the other side of an update-driven restart
+    // shell boot is the other side of an update-driven restart. Same pass
+    // also normalizes the version stamp: a mismatch here means the new
+    // files are already the running code (unrelated restart), so just
+    // adopt them — never restart from startup.
     updateNotice.command = ["/usr/bin/bash", "-c",
-      'n="$1";' +
+      'n="$1"; p="$2"; s="$3";' +
       ' if [ -f "$n" ] && [ -z "$(find "$n" -mmin +10 2>/dev/null)" ]; then' +
-      ' git -C "$2" rev-parse --short HEAD 2>/dev/null; fi;' +
-      ' rm -f -- "$n"',
-      "_", root.updateNoticeFile, root.pluginDir]
+      ' git -C "$p" rev-parse --short HEAD 2>/dev/null; fi;' +
+      ' rm -f -- "$n";' +
+      ' head=$(git -C "$p" rev-parse HEAD 2>/dev/null || true);' +
+      ' if [ -n "$head" ]; then mkdir -p "$(dirname "$s")";' +
+      ' stamped=$(cat "$s" 2>/dev/null || true);' +
+      ' [ "$stamped" = "$head" ] || echo "$head" > "$s"; fi',
+      "_", root.updateNoticeFile, root.pluginDir, root.headStampFile]
     updateNotice.running = true
   }
 
@@ -321,39 +328,6 @@ Item {
         root.notify("Soundpacks updated", line)
       }
       Quickshell.execDetached(["systemctl", "--user", "restart", "sorakey"])
-    }
-  }
-
-  // --------------------------------------------------- update watchdog
-  Process {
-    id: headCheck
-    stdout: StdioCollector { waitForEnd: true }
-    stderr: StdioCollector { waitForEnd: true }
-    onExited: function(exitCode) {
-      var line = String(stdout.text || "").trim().split("\n").pop()
-      if (line.indexOf("PENDING ") !== 0) return
-      console.info("sorakey watchdog: pending plugin update -> " + line.slice(8, 15) + ", restarting shell")
-      root.notify("Sorakey updating", "Applying update — the bar restarts for a moment.")
-      Quickshell.execDetached(["setsid", "omarchy", "restart", "shell"])
-    }
-  }
-
-  Timer {
-    id: headTimer
-    interval: 30000
-    repeat: true
-    running: true
-    onTriggered: {
-      if (headCheck.running) return
-      headCheck.command = ["/usr/bin/bash", "-c",
-        'p="$1"; s="$2"; n="$3";' +
-        ' head=$(git -C "$p" rev-parse HEAD 2>/dev/null) || exit 0;' +
-        ' stamped=$(cat "$s" 2>/dev/null);' +
-        ' if [ -z "$stamped" ]; then mkdir -p "$(dirname "$s")"; echo "$head" > "$s"; echo CLEAN;' +
-        ' elif [ "$stamped" != "$head" ]; then mkdir -p "$(dirname "$n")"; echo "$head" > "$s"; date +%s > "$n"; echo "PENDING $head";' +
-        ' else echo CLEAN; fi',
-        "_", root.pluginDir, root.headStampFile, root.updateNoticeFile]
-      headCheck.running = true
     }
   }
 

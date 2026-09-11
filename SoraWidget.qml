@@ -219,6 +219,13 @@ Panel {
 
   property bool updateBusy: false
   property string updateStatus: ""
+  // Two-step update: Check for Update only asks GitHub (shows the Update
+  // button when there's something to apply). checkResult: ""|"available"|
+  // "ready"|"current"|"error". "ready" = files already newer on disk
+  // (terminal update) — the button then only applies the restart.
+  property bool checkBusy: false
+  property string checkResult: ""
+  property bool updateAvailable: false
 
   // bar uses implicit size
   implicitWidth: button.implicitWidth
@@ -315,6 +322,27 @@ Panel {
       root.home + "/.cache/sorakey/update-result",
       "/usr/bin/bash", root.pluginDir + "/scripts/sora-update.sh",
       root.home + "/.cache/sorakey/update-result"])
+  }
+  // Verdict one-liner: fetch, then compare remote vs local vs the stamp
+  // the startup pass keeps. Fetch failure -> ERROR (never claim "up to
+  // date" from a failed check); empty stamp + same HEAD -> CURRENT, not
+  // READY (fresh installs have no stamp yet).
+  function doCheckUpdate() {
+    if (root.checkBusy) return
+    root.checkBusy = true
+    root.checkResult = ""
+    root.updateAvailable = false
+    checkProc.command = ["/usr/bin/bash", "-c",
+      'd="$1"; s="$2";' +
+      ' git -C "$d" fetch --quiet origin HEAD >/dev/null 2>&1 || { echo ERROR; exit 0; };' +
+      ' head=$(git -C "$d" rev-parse HEAD 2>/dev/null);' +
+      ' remote=$(git -C "$d" rev-parse --verify FETCH_HEAD 2>/dev/null);' +
+      ' if [ -z "$head" ] || [ -z "$remote" ]; then echo ERROR;' +
+      ' elif [ "$head" != "$remote" ]; then echo AVAILABLE;' +
+      ' else stamped=$(cat "$s" 2>/dev/null);' +
+      ' if [ -n "$stamped" ] && [ "$stamped" != "$head" ]; then echo READY; else echo CURRENT; fi; fi',
+      "_", root.pluginDir, root.home + "/.local/share/sorakey/session-head"]
+    checkProc.running = true
   }
 
   function install() {
@@ -480,6 +508,20 @@ Panel {
     id: clearUpdateTimer
     interval: 5000
     onTriggered: { root.updateStatus = ""; root.updateBusy = false }
+  }
+
+  // Check verdict arrives as one word; anything unrecognized is an error.
+  Process {
+    id: checkProc
+    stdout: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      root.checkBusy = false
+      var v = String(stdout.text || "").trim().split("\n").pop()
+      if (v === "AVAILABLE") { root.checkResult = "available"; root.updateAvailable = true }
+      else if (v === "READY") { root.checkResult = "ready"; root.updateAvailable = true }
+      else if (v === "CURRENT") { root.checkResult = "current"; root.updateAvailable = false }
+      else { root.checkResult = "error"; root.updateAvailable = false }
+    }
   }
 
   // auto-select imported pack
@@ -952,7 +994,7 @@ Panel {
             spacing: Style.space(2)
 
             Text {
-              text: "Sorakeys test1"
+              text: "Sorakey"
               color: root.heroMatchTheme ? Color.accent : root.bar.foreground
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.title
@@ -1176,19 +1218,48 @@ SoraDropdown {
               }
 
               Button {
-                text: root.updateBusy ? "Updating…" : "Update"
-                iconText: root.updateBusy ? "󰮭" : "󰮭"
+                text: root.checkBusy ? "Checking…" : "Check for Update"
+                iconText: root.checkBusy ? "󰮭" : "󰮭"
                 radius: root.friendlyRadius
-                iconSpinning: root.updateBusy
+                iconSpinning: root.checkBusy
                 foreground: root.bar.foreground
                 selected: true
                 width: (parent.width - Style.space(8)) / 2
                 verticalPadding: root.buttonYPadding
-                tooltipText: "Update Sorakey plugin"
-                enabled: !root.updateBusy
-                onClicked: root.doUpdate()
+                tooltipText: "Check whether a newer Sorakey is on GitHub"
+                enabled: !root.checkBusy && !root.updateBusy
+                onClicked: root.doCheckUpdate()
               
               }
+            }
+            // Update only exists after a check found something: "Update
+            // Sorakey" pulls the new version, "Apply Update" only applies
+            // a terminal update already on disk (brief bar restart).
+            Button {
+              visible: root.updateAvailable
+              width: parent.width - Style.space(24)
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: root.updateBusy ? "Updating…" : (root.checkResult === "ready" ? "Apply Update" : "Update Sorakey")
+              iconText: "󰮭"
+              radius: root.friendlyRadius
+              iconSpinning: root.updateBusy
+              foreground: root.bar.foreground
+              selected: true
+              verticalPadding: root.buttonYPadding
+              tooltipText: "Update Sorakey plugin"
+              enabled: !root.updateBusy
+              onClicked: root.doUpdate()
+            }
+            Text {
+              visible: root.checkResult !== ""
+              width: parent.width
+              horizontalAlignment: Text.AlignHCenter
+              text: root.checkResult === "available" ? "Update available — a newer Sorakey is on GitHub."
+                : root.checkResult === "ready" ? "Update ready to apply — the bar will restart briefly."
+                : root.checkResult === "current" ? "You're up to date."
+                : "Couldn't check — are you online?"
+              color: root.bar.foreground
+              opacity: 0.6
             }
             Text {
               visible: root.pluginVersion !== ""

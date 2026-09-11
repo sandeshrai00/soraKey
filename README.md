@@ -90,12 +90,30 @@ back immediately. To turn auto-start off entirely, disable the unit
 
 ## Update
 
+Button flow: open the Sorakey panel → **Check for Update** (asks GitHub
+once — the plugin never checks on its own) → if something is new, an
+**Update Sorakey** button appears → click it.
+
+Terminal flow (same result):
+
 ```sh
 omarchy plugin update io.github.sandeshrai00.sorakey --yes
 ```
 
-The QML updates in place. If the daemon source changed, the next shell start
-(or plugin reload) re-runs the installer — it downloads the CI prebuilt from
+then Check for Update in the panel (it will say "Update ready to apply")
+or just `omarchy restart shell`.
+
+How it works: Omarchy installs plugins as git checkouts and never pulls
+them itself. `omarchy plugin update` fetches the repo, fast-forwards to
+the newest commit, validates the result, and rolls back automatically if
+validation fails. Applying the new UI then needs a brief, intentional
+shell restart — the running shell keeps showing the old compiled UI until
+then — so the update toast says "the bar restarts for a moment", and after
+the restart a second toast confirms what's running (`v0.1.3 · abc1234`,
+also shown under the buttons). Toasts stay hidden while your notification
+silencing is on.
+
+If the daemon source changed, the next shell start re-runs the installer — it downloads the CI prebuilt from
 the versioned `vX.Y.Z` release matching that exact source (content hash) and
 restarts the daemon automatically. There is no source build and no rolling
 release on your machine: between a daemon change and its version tag there
