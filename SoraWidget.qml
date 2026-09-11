@@ -1260,6 +1260,9 @@ SoraDropdown {
                 : "Couldn't check — are you online?"
               color: root.bar.foreground
               opacity: 0.6
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
             }
             Text {
               visible: root.pluginVersion !== ""
