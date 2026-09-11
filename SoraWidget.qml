@@ -1219,7 +1219,7 @@ SoraDropdown {
 
               Button {
                 text: root.checkBusy ? "Checking…" : "Check for Update"
-                iconText: root.checkBusy ? "󰮭" : "󰮭"
+                iconText: root.checkBusy ? "󱍧" : "󱍧"
                 radius: root.friendlyRadius
                 iconSpinning: root.checkBusy
                 foreground: root.bar.foreground
@@ -1240,7 +1240,7 @@ SoraDropdown {
               width: parent.width - Style.space(24)
               anchors.horizontalCenter: parent.horizontalCenter
               text: root.updateBusy ? "Updating…" : "Click to Update"
-              iconText: "󰮭"
+              iconText: ""
               radius: root.friendlyRadius
               iconSpinning: root.updateBusy
               foreground: root.bar.foreground
