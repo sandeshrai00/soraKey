@@ -108,9 +108,10 @@ them itself. `omarchy plugin update` fetches the repo, fast-forwards to
 the newest commit, validates the result, and rolls back automatically if
 validation fails. Applying the new UI then needs a brief, intentional
 shell restart — the running shell keeps showing the old compiled UI until
-then — so the update toast says "the bar restarts for a moment", and after
-the restart a second toast confirms what's running (`v0.1.3 · abc1234`,
-also shown under the buttons). Toasts stay hidden while your notification
+then — and a few seconds after the restart one toast confirms what's
+running (`v0.1.3 · abc1234`, also shown under the buttons). That toast
+waits for the notification server first, so it never gets lost in the
+restart. Toasts stay hidden while your notification
 silencing is on.
 
 If the daemon source changed, the next shell start re-runs the installer — it downloads the CI prebuilt from

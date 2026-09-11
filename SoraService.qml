@@ -45,7 +45,11 @@ Item {
   property bool stoppedFlag: false
 
   signal packsImported(string packId)
-  function notify(title, msg) { Quickshell.execDetached(["omarchy-notification-send","--app-name","Sorakey", title, msg]); clearImportTimer.restart() }
+  // All toasts wait for the notification server first: the server IS the
+  // shell, so anything sent within seconds of a shell restart would go
+  // into the void (no bus-name owner yet). The wait returns in one ~100ms
+  // poll when the server is already up — no delay on normal toasts.
+  function notify(title, msg, urg) { Quickshell.execDetached(["/usr/bin/bash","-c",'omarchy-notification-wait 15 && exec omarchy-notification-send --app-name Sorakey -u "$1" "$2" "$3"', "_", urg || "low", title, msg]); clearImportTimer.restart() }
 
   // Detached pickers (reload-proof): the file dialog used to run as a
   // direct child of this service, and every plugin reload ("Local plugin
@@ -342,7 +346,7 @@ Item {
       var commit = String(stdout.text || "").trim()
       if (exitCode !== 0 || commit === "") return
       var version = root.manifest && root.manifest.version ? "v" + root.manifest.version + " · " : ""
-      root.notify("Sorakey updated", "Now running " + version + commit + ".")
+      root.notify("Sorakey updated", "Now running " + version + commit + ".", "normal")
     }
   }
 

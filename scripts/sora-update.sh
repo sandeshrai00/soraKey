@@ -37,7 +37,6 @@ if [[ -n $head && $head != "$stamped" ]]; then
   mkdir -p "$data_dir"
   echo "$head" > "$stamp"
   date +%s > "$notice"
-  notify "Sorakey updating" "Applying update — the bar restarts for a moment."
   restart_shell
   [[ -n $result ]] && printf 'OK: updating\n' >> "$result"
 elif [[ $rc -eq 0 ]]; then
