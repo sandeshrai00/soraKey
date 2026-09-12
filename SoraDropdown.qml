@@ -220,7 +220,9 @@ Item {
           function selectCurrent() {
             if (currentIndex < 0 || currentIndex >= root.options.length) return
             var v = root.optionValue(root.options[currentIndex])
-            root.value = v
+            // no root.value = v: parent owns `value` (binding to the store
+            // or live config) and writes it back in onChanged. Assigning
+            // here would sever the binding and freeze the label.
             root.changed(v)
             popup.close()
           }

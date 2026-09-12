@@ -300,7 +300,10 @@ Item {
                 if (root.deleteConfirmId !== "") { root.deleteConfirmId = ""; root.cancelDelete(); return }
                 if (currentIndex < 0 || currentIndex >= root.filtered.length) return
                 var v = root.optionValue(root.filtered[currentIndex])
-                root.value = v
+                // no root.value = v: parent owns `value` (binding to the
+                // store) and writes it back in onChanged. Assigning here
+                // would sever the binding, freezing the label on external
+                // changes (e.g. delete fallback from the daemon).
                 root.changed(v)
                 popup.close()
               }
