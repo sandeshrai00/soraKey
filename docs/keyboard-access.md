@@ -70,7 +70,7 @@ Removing the rule revokes future access; revoking the ACL on live nodes stops th
 
 ### Option A — via GUI (recommended for users)
 
-Uninstalling the plugin removes the rule with the same one-time approval:
+Uninstalling the plugin removes the rule **and revokes the live ACL** with the same one-time approval (so a same-session reinstall asks for keyboard permission again):
 
 ```bash
 # from the panel: Settings → Uninstall Sorakey, or:
@@ -78,10 +78,7 @@ Uninstalling the plugin removes the rule with the same one-time approval:
 # then: omarchy plugin remove io.github.sandeshrai00.sorakey --yes
 ```
 
-`sora-uninstall.sh` runs:
-```bash
-pkexec bash -c "rm -f /etc/udev/rules.d/70-sora-keyboard.rules && udevadm control --reload-rules && udevadm trigger --subsystem-match=input --action=change"
-```
+`sora-uninstall.sh` revokes the full permission in one approved step: it removes both rule files (`70-sora-keyboard.rules` + legacy), reloads and re-triggers udev, and runs `setfacl -b` on the current keyboard nodes only (`ID_INPUT_KEYBOARD==1`; mice/touchpads keep their grants). Removing the rule alone would leave a stale ACL that hides the re-install prompt — the rule file would then stay missing and the keyboard would be dead after the next reboot.
 
 ### Option B — manual revoke (for developers / fresh-install testing)
 

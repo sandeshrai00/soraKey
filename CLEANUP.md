@@ -18,7 +18,7 @@ find ~/.config ~/.local ~/.cache -name "*sorakey*" -o -name "*Sorakey*" -o -name
 | `~/.cache/sorakey/` | Temp cache |
 | `~/.config/sorakey/` | Panel prefs (logo, corners) |
 | `~/.config/systemd/user/sorakey.service` | Systemd service |
-| `/etc/udev/rules.d/70-sora-keyboard.rules` | Keyboard-access rule (removed with one approval) |
+| `/etc/udev/rules.d/70-sora-keyboard.rules` | Keyboard-access rule + live ACL (both revoked with one approval) |
 | `$XDG_RUNTIME_DIR/sorakey.{sock,lock}` | Daemon runtime files |
 
 The panel's Uninstall button runs `sora-uninstall.sh --purge` (full wipe above)

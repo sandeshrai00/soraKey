@@ -11,15 +11,29 @@ echo "== Sorakey uninstall =="
 systemctl --user disable --now sorakey 2>/dev/null || true
 systemctl --user daemon-reload 2>/dev/null || true
 pkill -x sorakey 2>/dev/null || true
-# remove the keyboard-access rule installed via the panel (GUI-approved);
-# needs one approval, like the install did
-if [[ -f "$UDEV_RULE" || -f "$UDEV_RULE_LEGACY" ]]; then
+# Revoke the full keyboard permission: the rule file AND the live ACL on the
+# keyboard node. The ACL outlives the rule file — removing only the rule leaves
+# a stale grant, so the daemon (which just probes "can I open
+# /dev/input/event*?") keeps reading after reinstall and never re-installs the
+# rule; the keyboard is then dead after the next reboot. Same one approval.
+has_live_acl() {
+  local d
+  for d in /dev/input/event*; do
+    [[ -e "$d" ]] || continue
+    udevadm info --query=property --name="$d" 2>/dev/null | grep -qx "ID_INPUT_KEYBOARD=1" || continue
+    getfacl -p "$d" 2>/dev/null | grep -q "^user:$(id -un):" && return 0
+  done
+  return 1
+}
+if [[ -f "$UDEV_RULE" || -f "$UDEV_RULE_LEGACY" ]] || has_live_acl; then
   if command -v pkexec >/dev/null 2>&1; then
-    pkexec bash -c "rm -f '$UDEV_RULE' '$UDEV_RULE_LEGACY' && udevadm control --reload-rules && udevadm trigger --subsystem-match=input --action=change" 2>/dev/null \
-      && echo "removed keyboard-access rule" \
-      || echo "kept $UDEV_RULE (approval declined) — remove with: pkexec rm $UDEV_RULE"
+    # Root paths travel as argv ($1/$2), never embedded in shell text.
+    # setfacl is scoped to keyboard nodes only — mice/touchpads keep theirs.
+    pkexec bash -c 'rm -f "$1" "$2"; udevadm control --reload-rules; udevadm trigger --subsystem-match=input --action=change; for d in /dev/input/event*; do [ -e "$d" ] || continue; if udevadm info --query=property --name="$d" 2>/dev/null | grep -qx "ID_INPUT_KEYBOARD=1"; then setfacl -b "$d" 2>/dev/null || true; fi; done' _ "$UDEV_RULE" "$UDEV_RULE_LEGACY" 2>/dev/null \
+      && echo "removed keyboard access (rule + live ACL)" \
+      || echo "kept keyboard access (approval declined) — remove with: pkexec rm $UDEV_RULE"
   else
-    echo "kept $UDEV_RULE (no pkexec) — remove with: sudo rm $UDEV_RULE"
+    echo "kept keyboard access (no pkexec) — remove with: sudo rm $UDEV_RULE && sudo setfacl -b /dev/input/event*"
   fi
 fi
 if [[ $PURGE -eq 1 ]]; then
