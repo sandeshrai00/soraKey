@@ -33,7 +33,7 @@ The panel opens your `$TERMINAL` (or `xdg-terminal-exec`) and runs:
 /path/to/plugin/scripts/sora-keyboard-access.sh --use-sudo
 # you type your password in your own terminal, nothing is logged
 ```
-Both buttons share the same unified `Enabling…` UI — both buttons hide, one centered spinner + `Check your terminal… / Waiting for approval…` → `Verifying…` → `Finishing up…`.
+Both buttons share the same unified `Enabling…` UI — both buttons hide, one centered spinner + `Check your terminal… / Waiting for approval…` → `Verifying…` → `Finishing up…`. Closing the terminal window mid-run cancels — both Enable buttons come straight back.
 
 Manual equivalent (run from plugin directory):
 ```bash

@@ -134,15 +134,111 @@ Panel {
     interval: 30000
     onTriggered: {
       if (root.terminalBusy) {
+        // Heartbeat seen recently: the user is still working in the terminal
+        // (slow sudo password, reading output) — keep waiting, not failing.
+        if (Date.now() - root.grantLastAlive < 15000) {
+          terminalTimeout.restart()
+          return
+        }
         root.terminalBusy = false
         root.capturePhase = ""
         capturePhaseTimer.stop()
-        // No success signal arrived: the terminal never opened (missing
-        // TERMINAL?) or the script never ran — say so, don't just go quiet.
-        root.errorToast = "Terminal did not respond — check a terminal is installed."
+        root.wipeGrantFiles()
+        // Backstop only: the run went quiet with no result and no heartbeat.
+        root.errorToast = "Terminal run timed out — try again."
         clearErrorToast.restart()
       }
     }
+  }
+  // Terminal-grant sentinel: fixInTerminal launches fire-and-forget, so the
+  // wrapper script reports back via files. Result file = enable script's exit
+  // code; .alive touched every 2s while the run is live. Stale/missing .alive
+  // with no result (past launch grace) = the user closed the window.
+  readonly property string grantRunDir: Quickshell.env("XDG_RUNTIME_DIR") || "/tmp"
+  readonly property string grantResultFile: grantRunDir + "/sorakey-terminal-grant"
+  property double grantLaunchedAt: 0
+  property double grantLastAlive: 0
+  // One verdict per poll: DONE <code> [+ err line] → consume like the GUI
+  // path; WAIT ALIVE → user active, note it; WAIT AWAY → grace, keep waiting;
+  // GONE → cancelled, bring the two Enable buttons back.
+  Timer {
+    id: grantPollTimer
+    interval: 2000
+    repeat: true
+    running: root.terminalBusy
+    onTriggered: {
+      if (grantProc.running) return
+      grantProc.command = ["/usr/bin/bash", "-c",
+        "r=\"$1\"; since=\"$2\"; a=\"$r.alive\"; now=$(date +%s);"
+        + " if [[ -f \"$r\" ]]; then echo \"DONE $(cat \"$r\" 2>/dev/null)\"; tail -n 1 \"$r.err\" 2>/dev/null; exit 0; fi;"
+        + " alive=0;"
+        + " if [[ -f \"$a\" ]]; then m=$(stat -c %Y \"$a\" 2>/dev/null || echo 0); (( now - m < 8 )) && alive=1; fi;"
+        + " if (( alive == 1 )); then echo \"WAIT ALIVE\";"
+        + " elif (( now - since < 15 )); then echo \"WAIT AWAY\";"
+        + " else echo GONE; fi",
+        "_", root.grantResultFile, String(Math.floor(root.grantLaunchedAt))]
+      grantProc.running = true
+    }
+  }
+  Process {
+    id: grantProc
+    stdout: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      if (!root.terminalBusy) return // already resolved via daemon report
+      var lines = String(stdout.text || "").trim().split("\n")
+      var head = (lines.length > 0 ? lines[0] : "").split(" ")
+      if (head[0] === "DONE") {
+        root.consumeGrantResult(head.length > 1 ? head[1] : "", lines.length > 1 ? lines.slice(1).join("\n") : "")
+      } else if (head[0] === "WAIT" && head.length > 1 && head[1] === "ALIVE") {
+        root.grantLastAlive = Date.now()
+      } else if (head[0] === "GONE") {
+        root.cancelTerminalGrant()
+      }
+      // WAIT AWAY (or a failed check): keep waiting, timeout is the backstop.
+    }
+  }
+  // Pure deleter for the sentinel files: every exit from terminalBusy wipes
+  // (consume, cancel, timeout, daemon-success), and the wrapper wipes at
+  // start — a stale file can never pass as a fresh run's result.
+  Process {
+    id: wipeGrantProc
+  }
+  function wipeGrantFiles() {
+    wipeGrantProc.command = ["/usr/bin/rm", "-f", root.grantResultFile, root.grantResultFile + ".err", root.grantResultFile + ".alive"]
+    wipeGrantProc.running = true
+  }
+  // Same exit-code contract as the GUI path's captureProc: 0 → finishing,
+  // 2/3 → silent return, else → error toast with the script's stderr tail.
+  function consumeGrantResult(code, errTail) {
+    root.terminalBusy = false
+    root.capturePhase = ""
+    capturePhaseTimer.stop()
+    terminalTimeout.stop()
+    root.wipeGrantFiles()
+    if (code === "0") {
+      root.captureStatus = "Keyboard sounds enabled."
+      root.errorToast = ""
+      root.captureSettling = true
+      root.capturePhase = "Finishing up…"
+      captureSettleTimer.restart()
+    } else if (code === "2" || code === "3") {
+      root.captureStatus = ""
+      root.errorToast = ""
+    } else {
+      root.captureStatus = ""
+      root.errorToast = root.shortText(errTail !== "" ? errTail : "Could not enable — try again.")
+      clearErrorToast.restart()
+    }
+    root.refreshStatus()
+  }
+  function cancelTerminalGrant() {
+    root.terminalBusy = false
+    root.capturePhase = ""
+    root.captureStatus = "Grant cancelled."
+    capturePhaseTimer.stop()
+    terminalTimeout.stop()
+    root.wipeGrantFiles()
+    root.refreshStatus()
   }
   // post-success settling: the script exits 0 as soon as the rule works,
   // but the daemon only re-scans keyboards every ~5s, so status still
@@ -166,6 +262,7 @@ Panel {
         root.terminalBusy = false
         terminalTimeout.stop()
         capturePhaseTimer.stop()
+        root.wipeGrantFiles()
         root.capturePhase = "Finishing up…"
         root.captureSettling = true
         captureSettleTimer.restart()
@@ -186,22 +283,23 @@ Panel {
     captureProc.running = true
   }
 
-  // Last-resort route for boxes without any approval dialog: open the
-  // system terminal (whatever is installed) with the enable script in
-  // sudo mode, so the password goes into the user's own terminal.
-  // Quoting: the script path is quoted but --use-sudo stays OUTSIDE those
-  // quotes (still inside the -c string) — quoting them together would make
-  // bash look for a file literally named "... --use-sudo".
+  // Terminal route: opens the system terminal with a small wrapper that runs
+  // the enable script in sudo mode and reports back via sentinel files (the
+  // launch itself is fire-and-forget, so the panel polls the result). Closing
+  // the window mid-run cancels: both Enable buttons come straight back.
   function fixInTerminal() {
     if (root.captureWorking || root.terminalBusy) return
     var term = Quickshell.env("TERMINAL") || "xdg-terminal-exec"
+    var grant = root.pluginDir + "/scripts/sora-terminal-grant.sh"
     var script = root.pluginDir + "/scripts/sora-keyboard-access.sh"
     root.terminalBusy = true
+    root.captureStatus = ""
     root.capturePhase = "Check your terminal…"
+    root.grantLaunchedAt = Math.floor(Date.now() / 1000)
+    root.grantLastAlive = Date.now()
     capturePhaseTimer.restart()
     terminalTimeout.restart()
-    Quickshell.execDetached([term, "--", "/usr/bin/bash", "-c",
-      "\"" + script + "\" --use-sudo; echo; read -n1 -rp 'Press any key to close…'"])
+    Quickshell.execDetached([term, "--", "/usr/bin/bash", grant, script])
   }
 
   property bool setupBusy: false
