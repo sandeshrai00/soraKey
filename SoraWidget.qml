@@ -152,18 +152,19 @@ Panel {
   }
   // Terminal-grant sentinel: fixInTerminal launches fire-and-forget, so the
   // wrapper script reports back via files. Result file = enable script's exit
-  // code; .alive touched every 2s while the run is live. Stale/missing .alive
-  // with no result (past launch grace) = the user closed the window.
+  // code; .alive touched every second while the run is live. A stale .alive
+  // with no result = the window was closed (cancel, any age); .alive never
+  // appearing within 15s = the terminal failed to open.
   readonly property string grantRunDir: Quickshell.env("XDG_RUNTIME_DIR") || "/tmp"
   readonly property string grantResultFile: grantRunDir + "/sorakey-terminal-grant"
   property double grantLaunchedAt: 0
   property double grantLastAlive: 0
   // One verdict per poll: DONE <code> [+ err line] → consume like the GUI
-  // path; WAIT ALIVE → user active, note it; WAIT AWAY → grace, keep waiting;
-  // GONE → cancelled, bring the two Enable buttons back.
+  // path; WAIT ALIVE → user active, note it; WAIT AWAY → terminal still
+  // opening, keep waiting; GONE → window closed, bring Enable buttons back.
   Timer {
     id: grantPollTimer
-    interval: 2000
+    interval: 1000
     repeat: true
     running: root.terminalBusy
     onTriggered: {
@@ -171,9 +172,8 @@ Panel {
       grantProc.command = ["/usr/bin/bash", "-c",
         "r=\"$1\"; since=\"$2\"; a=\"$r.alive\"; now=$(date +%s);"
         + " if [[ -f \"$r\" ]]; then echo \"DONE $(cat \"$r\" 2>/dev/null)\"; tail -n 1 \"$r.err\" 2>/dev/null; exit 0; fi;"
-        + " alive=0;"
-        + " if [[ -f \"$a\" ]]; then m=$(stat -c %Y \"$a\" 2>/dev/null || echo 0); (( now - m < 8 )) && alive=1; fi;"
-        + " if (( alive == 1 )); then echo \"WAIT ALIVE\";"
+        + " if [[ -f \"$a\" ]]; then m=$(stat -c %Y \"$a\" 2>/dev/null || echo 0);"
+        + "   if (( now - m < 3 )); then echo \"WAIT ALIVE\"; else echo GONE; fi;"
         + " elif (( now - since < 15 )); then echo \"WAIT AWAY\";"
         + " else echo GONE; fi",
         "_", root.grantResultFile, String(Math.floor(root.grantLaunchedAt))]

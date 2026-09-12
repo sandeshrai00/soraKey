@@ -6,7 +6,7 @@
 # Files in ${XDG_RUNTIME_DIR:-/tmp}:
 #   sorakey-terminal-grant        exit code of the enable script (the result)
 #   sorakey-terminal-grant.err    its stderr tail (for the panel's error toast)
-#   sorakey-terminal-grant.alive  touched every 2s while the run is live
+#   sorakey-terminal-grant.alive  touched every second while the run is live
 # Killed mid-run (window closed, Ctrl-C at the sudo prompt): the trap stops
 # the heartbeat and no result file is written — stale/missing .alive with no
 # result means the user cancelled.
@@ -23,7 +23,7 @@ ERR="$RESULT.err"
 ALIVE="$RESULT.alive"
 rm -f "$RESULT" "$ERR" "$ALIVE"
 HEART=""
-( while true; do touch "$ALIVE" 2>/dev/null; sleep 2; done ) &
+( while true; do touch "$ALIVE" 2>/dev/null; sleep 1; done ) &
 HEART=$!
 trap 'if [[ -n "$HEART" ]]; then kill "$HEART" 2>/dev/null; fi' EXIT
 "$SCRIPT" --use-sudo 2>"$ERR"
