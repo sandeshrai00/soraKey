@@ -103,6 +103,20 @@ sync_soundpacks() {
   return 0
 }
 
+# Stage the menu-deletion revoke helper next to the binary. The plugin dir
+# (where sora-uninstall.sh lives) is already gone when the orphan self-clean
+# needs it, so the helper must live in the stable lib dir. Copied, never
+# symlinked — a later plugin deletion can't take it along. Non-fatal: if
+# staging fails, menu deletion degrades to the notify fallback.
+sync_revoke_script() {
+  local src="$PLUGIN_DIR/scripts/sora-keyboard-revoke.sh"
+  [[ -f "$src" ]] || { echo "sora-build: revoke helper missing: $src" >&2; return 0; }
+  install -m 755 "$src" "$LIB_DIR/sora-keyboard-revoke.sh" 2>/dev/null || {
+    echo "sora-build: cannot stage revoke helper (permissions on $LIB_DIR?) — menu deletion will notify instead" >&2
+  }
+  return 0
+}
+
 if ! version="$(python3 -c "import json;print(json.load(open('$MANIFEST'))['version'])" 2>/dev/null)"; then
   echo "sora-build: cannot parse version from $MANIFEST" >&2
   exit 1
@@ -143,6 +157,7 @@ if [[ -f "$LIB_DIR/source.sha256" ]] && [[ "$(cat "$LIB_DIR/source.sha256" 2>/de
   # Binary is current: only packs may have moved. Skip the download below;
   # the sync line alone restarts the daemon.
   sync_soundpacks
+  sync_revoke_script
   if [[ "$packs_changed" == 0 ]]; then
     echo "sorakey up to date (source $source_id)"
   else
@@ -269,6 +284,7 @@ if [[ "${SORAKEY_ALLOW_SOURCE:-}" == "1" ]]; then
   cargo build --locked --release --manifest-path "$DAEMON_DIR/Cargo.toml" --target-dir "$TARGET_DIR"
   install -m 755 "$TARGET_DIR/release/sorakey" "$BIN"
   echo "$source_id" > "$LIB_DIR/source.sha256"
+  sync_revoke_script
   echo "Built from source (dev bypass SORAKEY_ALLOW_SOURCE=1) and installed $BIN"
   if [[ "$packs_changed" == 1 ]]; then echo "$SYNC_LINE"; fi
   exit 0
@@ -279,4 +295,5 @@ fi
 # refusal, nothing in between.
 sync_soundpacks
 try_download_prebuilt
+sync_revoke_script
 if [[ "$packs_changed" == 1 ]]; then echo "$SYNC_LINE"; fi

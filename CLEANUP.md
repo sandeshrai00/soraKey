@@ -22,9 +22,10 @@ find ~/.config ~/.local ~/.cache -name "*sorakey*" -o -name "*Sorakey*" -o -name
 | `$XDG_RUNTIME_DIR/sorakey.{sock,lock}` | Daemon runtime files |
 
 The panel's Uninstall button runs `sora-uninstall.sh --purge` (full wipe above)
-plus `omarchy plugin remove`. Removed via Omarchy's menu instead? The daemon
-self-cleans (unit + binary) the instant the checkout disappears — the
-rule row above still needs the manual one-liner. Exported log files (your chosen location)
+plus `omarchy plugin remove`. Removed via Omarchy's menu instead? Same
+standard: the daemon stops itself instantly and a helper wipes everything
+above (including the rule row) with one approval dialog — decline it and use
+the one-liner from `docs/keyboard-access.md`. Exported log files (your chosen location)
 are yours and are never deleted.
 
 ## Services to Check

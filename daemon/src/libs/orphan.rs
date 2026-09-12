@@ -41,13 +41,53 @@ fn should_self_clean(misses: u32) -> bool {
     misses >= MISS_LIMIT
 }
 
-/// Stop + disable our own unit, delete unit + binary, then exit(0).
+/// Launch the staged revoke helper fully detached: data wipe + rule/ACL
+/// revoke with one approval. Plain spawn is enough — the child is reparented
+/// on our exit and the unit is already disabled, so nothing kills it.
+/// Absolute binary path: a service context has a minimal PATH.
+fn launch_revoke_helper() -> bool {
+    let home = match std::env::var_os("HOME").map(PathBuf::from) {
+        Some(h) => h,
+        None => return false,
+    };
+    let script = home.join(".local/lib/sorakey/sora-keyboard-revoke.sh");
+    if !script.is_file() {
+        return false; // old install without the staged helper
+    }
+    Command::new("/usr/bin/bash")
+        .arg(&script)
+        .arg("--self-clean")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .is_ok()
+}
+
+/// Surface residue the self-clean could not remove: absolute paths, the
+/// panel already documents the same one-liner.
+fn notify_residue() {
+    let _ = Command::new("/usr/bin/omarchy-notification-send")
+        .args([
+            "--app-name",
+            "Sorakey",
+            "-u",
+            "normal",
+            "Sorakey removed itself",
+            "Keyboard permission may remain — revoke with: pkexec rm /etc/udev/rules.d/70-sora-keyboard.rules",
+        ])
+        .status();
+}
+
+/// Stop + disable our own unit, launch the revoke helper, delete unit +
+/// binary + consent note, then exit(0).
 /// exit(0) is load-bearing: Restart=on-failure must NOT revive us.
 fn self_clean() {
     crate::always_print!("sorakey: plugin checkout gone — removing orphaned daemon");
     let _ = Command::new("systemctl")
         .args(["--user", "disable", UNIT])
         .status();
+    let helper_launched = launch_revoke_helper();
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
         for rel in [
             ".config/systemd/user/sorakey.service",
@@ -67,9 +107,16 @@ fn self_clean() {
             .args(["--user", "daemon-reload"])
             .status();
     }
-    crate::always_print!(
-        "sorakey: stopped. Soundpacks kept at ~/.local/share/sorakey; keyboard consent revoked (reinstall re-asks); rule (if any) can be revoked with: pkexec rm /etc/udev/rules.d/70-sora-keyboard.rules"
-    );
+    if helper_launched {
+        crate::always_print!(
+            "sorakey: stopped. Revoke helper launched: full data wipe + keyboard permission revoke with one approval."
+        );
+    } else {
+        notify_residue();
+        crate::always_print!(
+            "sorakey: stopped. No staged revoke helper — keyboard permission may remain (see notification); rule (if any) can be revoked with: pkexec rm /etc/udev/rules.d/70-sora-keyboard.rules"
+        );
+    }
     std::process::exit(0);
 }
 

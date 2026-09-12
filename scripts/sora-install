@@ -15,6 +15,23 @@ UNIT="$UNIT_DIR/sorakey.service"
 step() { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 die()  { printf '\n\033[1;31msora-install: %s\033[0m\n' "$*" >&2; exit 1; }
 
+# Stale-install check: the marker records this path's filesystem identity
+# (dev:ino) at install time. If it differs now, the directory was deleted
+# and recreated — a previous install was removed externally (menu remove
+# while the daemon was stopped) without cleanup. Notify only: a heuristic
+# must never auto-wipe data.
+MARKER="$SHARE/.installed-from"
+if [[ -f "$MARKER" ]]; then
+  old_id=$(cat "$MARKER" 2>/dev/null || true)
+  new_id=$(stat -c '%d:%i' "$PLUGIN_DIR" 2>/dev/null || true)
+  if [[ -n "$old_id" && -n "$new_id" && "$old_id" != "$new_id" ]]; then
+    echo "note: previous install was removed without cleanup (keyboard permission and data may remain)" >&2
+    if command -v omarchy-notification-send >/dev/null 2>&1; then
+      omarchy-notification-send --app-name Sorakey -u normal "Sorakey: previous install was removed" "Keyboard permission and data may remain — revoke with: pkexec rm /etc/udev/rules.d/70-sora-keyboard.rules" 2>/dev/null || true
+    fi
+  fi
+fi
+
 # 1. Install daemon (verified prebuilt only — never compiled here)
 [[ -d "$DAEMON_DIR" ]] || die "daemon/ not found next to this script"
 step "Installing sorakey (verified prebuilt only)"
@@ -77,3 +94,6 @@ fi
 step "Done"
 echo "Sorakey is installed and running. Open the Sorakey bar panel to tune it."
 echo "Type a few keys — you should hear them."
+# record this install's identity for the stale check above (written only on
+# success; a failed install keeps the old marker and re-notifies next time)
+stat -c '%d:%i' "$PLUGIN_DIR" > "$MARKER" 2>/dev/null || true

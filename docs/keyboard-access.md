@@ -82,7 +82,7 @@ Uninstalling the plugin removes the rule **and revokes the live ACL** with the s
 re-triggers udev, and runs `setfacl -b` on the current keyboard nodes only
 (`ID_INPUT_KEYBOARD==1`; mice/touchpads keep their grants). Removing the rule alone would leave a stale ACL that hides the re-install prompt — the rule file would then stay missing and the keyboard would be dead after the next reboot.
 
-Removed the plugin from Omarchy's menu instead of uninstalling? The daemon stops itself, but the rule stays — revoke it with Option B steps 1–2 above.
+Removed the plugin from Omarchy's menu instead of uninstalling? Same full cleanup as Uninstall: the daemon stops itself and a helper wipes the data and revokes the rule with one approval dialog. Decline the dialog and the rule stays — revoke it with Option B steps 1–2 above.
 
 Sound additionally requires an in-app consent note (`~/.local/share/sorakey/keyboard-granted`, written on every approval, revoked by every removal). So remove → reinstall always re-asks — even when the system grant silently survived.
 
