@@ -142,6 +142,11 @@ omarchy restart shell
 `.bak` timestamped folder; `sora-uninstall.sh --purge` deletes it instead. The
 final `omarchy restart shell` drops the bar icon.
 
+> Removed via Omarchy's own menu instead (`plugin → remove`)? That path has no
+> cleanup hook: the daemon notices its checkout is gone and stops itself within
+> ~30s (unit + binary removed, packs kept). The keyboard rule stays behind —
+> revoke it with the one-liner in `docs/keyboard-access.md`.
+
 ## Import a soundpack
 
 Click the keyboard icon on the bar → **Import Sound** → pick a `.zip`.

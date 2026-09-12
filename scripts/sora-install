@@ -36,7 +36,7 @@ echo "soundpacks: $(find "$SHARE/soundpacks/keyboard" -maxdepth 1 -mindepth 1 -t
 # 3. systemd service
 step "Installing the sorakey user service"
 mkdir -p "$UNIT_DIR"
-  cat > "$UNIT" <<'EOF'
+  cat > "$UNIT" <<EOF
 [Unit]
 Description=Sorakey keyboard sound daemon
 After=default.target pipewire-pulse.service
@@ -46,6 +46,7 @@ StartLimitIntervalSec=60
 
 [Service]
 Type=simple
+Environment="SORA_PLUGIN_HOME=$PLUGIN_DIR"
 ExecStart=%h/.local/bin/sorakey
 Restart=on-failure
 RestartSec=2

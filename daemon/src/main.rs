@@ -47,6 +47,13 @@ fn main() {
         std::process::exit(1);
     }
 
+    #[cfg(target_os = "linux")]
+    {
+        // `omarchy plugin remove` has no hook: if our checkout is gone, stop
+        // ourselves (unit + binary) instead of haunting the session.
+        crate::libs::orphan::check_at_startup();
+        crate::libs::orphan::spawn_watchdog();
+    }
     libs::startup::start_input_capture(keyboard_tx, hotkey_tx);
     always_print!("✅ sorakey ready. Ctrl+Alt+M mutes, Ctrl+C exits.");
 
