@@ -60,6 +60,29 @@ fn is_keyboard_device(device: &evdev::Device) -> bool {
         || name.contains("kbd")
 }
 
+/// Parse the consent note's uid (`<uid> <iso-timestamp>`). Pure: tested.
+#[cfg(target_os = "linux")]
+fn consent_uid(content: &str) -> Option<u32> {
+    content.split_whitespace().next()?.parse().ok()
+}
+
+/// Consent is valid only when the note exists and names the current uid.
+/// Pure: tested. The OS grant alone is not enough: it can silently survive
+/// a plugin remove+reinstall (rule in /etc re-grants at boot), while the
+/// note is revoked by every removal path.
+#[cfg(target_os = "linux")]
+fn consent_trusted_for(content: Option<&str>, uid: u32) -> bool {
+    content.and_then(consent_uid) == Some(uid)
+}
+
+#[cfg(target_os = "linux")]
+fn consent_trusted() -> bool {
+    let content = std::fs::read_to_string(crate::state::folders::consent_stamp()).ok();
+    // SAFETY: getuid has no failure mode.
+    let uid = unsafe { libc::getuid() };
+    consent_trusted_for(content.as_deref(), uid)
+}
+
 #[cfg(target_os = "linux")]
 pub fn start_evdev_keyboard_listener(keyboard_tx: Sender<String>, hotkey_tx: Sender<String>) {
     crate::always_print!("🔍 [evdev] start_evdev_keyboard_listener() called - spawning thread");
@@ -196,6 +219,7 @@ pub fn start_evdev_keyboard_listener(keyboard_tx: Sender<String>, hotkey_tx: Sen
         // permission grant or a late device plug-in recovers without a
         // daemon restart.
         let mut attempt: u32 = 0;
+        let mut consent_logged = false;
         loop {
             let devices: Vec<_> = evdev::enumerate().collect();
             let device_count = devices.len();
@@ -214,6 +238,25 @@ pub fn start_evdev_keyboard_listener(keyboard_tx: Sender<String>, hotkey_tx: Sen
                 std::thread::sleep(std::time::Duration::from_secs(5));
                 continue;
             }
+            // Consent gate: an OS grant without our note means the plugin was
+            // removed and reinstalled without re-approval. Report blocked and
+            // recheck on the existing 5s rhythm — "Enable keyboard sounds"
+            // writes the note, the next pass proceeds.
+            if !consent_trusted() {
+                crate::state::status::set_input_keyboards(0);
+                crate::state::status::set_input_error(Some(
+                    "keyboard_consent_missing: re-approve in the panel".to_string(),
+                ));
+                if !consent_logged {
+                    consent_logged = true;
+                    crate::always_eprint!(
+                        "❌ [evdev] Keyboard readable but no consent note — waiting for re-approval"
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                continue;
+            }
+            consent_logged = false;
             crate::always_print!("🔍 [evdev] Found {} total input devices", device_count);
 
             let mut keyboards: Vec<(std::path::PathBuf, evdev::Device)> = Vec::new();
@@ -348,5 +391,24 @@ fn map_evdev_keycode(code: u16) -> &'static str {
         KeyCode::KEY_PAGEDOWN => "PageDown",
 
         _ => "",
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::{consent_trusted_for, consent_uid};
+
+    #[test]
+    fn consent_needs_a_note_naming_this_user() {
+        assert_eq!(consent_uid("1000 2026-09-12T09:00:00Z"), Some(1000));
+        assert_eq!(consent_uid(""), None);
+        assert_eq!(consent_uid("not-a-uid 2026-09-12"), None);
+        assert!(consent_trusted_for(Some("1000 2026-09-12T09:00:00Z"), 1000));
+        assert!(!consent_trusted_for(
+            Some("1000 2026-09-12T09:00:00Z"),
+            1001
+        ));
+        assert!(!consent_trusted_for(None, 1000));
+        assert!(!consent_trusted_for(Some(""), 1000));
     }
 }

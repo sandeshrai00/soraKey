@@ -84,6 +84,8 @@ re-triggers udev, and runs `setfacl -b` on the current keyboard nodes only
 
 Removed the plugin from Omarchy's menu instead of uninstalling? The daemon stops itself, but the rule stays — revoke it with Option B steps 1–2 above.
 
+Sound additionally requires an in-app consent note (`~/.local/share/sorakey/keyboard-granted`, written on every approval, revoked by every removal). So remove → reinstall always re-asks — even when the system grant silently survived.
+
 ### Option B — manual revoke (for developers / fresh-install testing)
 
 No terminal is available to agents, so the shell uses `pkexec` (GUI prompt). In a terminal you can use `sudo`:

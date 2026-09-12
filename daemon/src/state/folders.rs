@@ -19,6 +19,15 @@ pub fn get_writable_data_dir() -> &'static PathBuf {
     DIR.get_or_init(|| data_dir().join("data"))
 }
 
+/// Consent note: written by sora-keyboard-access.sh on every successful
+/// approval (`<uid> <iso-timestamp>`). Every removal path revokes it —
+/// panel uninstall purges/moves the whole tree, the orphan self-clean
+/// deletes the file — so remove+reinstall always re-asks, even if the OS
+/// grant silently survived.
+pub fn consent_stamp() -> PathBuf {
+    data_dir().join("keyboard-granted")
+}
+
 pub mod data {
     use super::get_writable_data_dir;
     use std::path::PathBuf;

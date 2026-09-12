@@ -49,7 +49,12 @@ fn self_clean() {
         .args(["--user", "disable", UNIT])
         .status();
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        for rel in [".config/systemd/user/sorakey.service", ".local/bin/sorakey"] {
+        for rel in [
+            ".config/systemd/user/sorakey.service",
+            ".local/bin/sorakey",
+            // consent note: reinstall re-asks even if the OS grant survived
+            ".local/share/sorakey/keyboard-granted",
+        ] {
             let p = home.join(rel);
             match std::fs::remove_file(&p) {
                 Ok(()) => crate::always_print!("sorakey: removed {}", p.display()),
@@ -63,7 +68,7 @@ fn self_clean() {
             .status();
     }
     crate::always_print!(
-        "sorakey: stopped. Soundpacks kept at ~/.local/share/sorakey; keyboard rule (if any) can be revoked with: pkexec rm /etc/udev/rules.d/70-sora-keyboard.rules"
+        "sorakey: stopped. Soundpacks kept at ~/.local/share/sorakey; keyboard consent revoked (reinstall re-asks); rule (if any) can be revoked with: pkexec rm /etc/udev/rules.d/70-sora-keyboard.rules"
     );
     std::process::exit(0);
 }
