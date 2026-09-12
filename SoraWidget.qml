@@ -1093,7 +1093,7 @@ Panel {
             spacing: Style.space(2)
 
             Text {
-              text: "Sorakeys man"
+              text: "Sorakeys"
               color: root.heroMatchTheme ? Color.accent : root.bar.foreground
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.title
@@ -1303,7 +1303,7 @@ SoraDropdown {
 
               Button {
                 text: root.exporting ? "Exporting…" : "Export Logs"
-                iconText: root.exporting ? "󱑢" : ""
+                iconText: root.exporting ? "󰸳" : ""
                 radius: root.friendlyRadius
                 iconSpinning: root.exporting
                 foreground: root.bar.foreground
@@ -1318,7 +1318,7 @@ SoraDropdown {
 
               Button {
                 text: root.checkBusy ? "Checking…" : "Check for Update"
-                iconText: root.checkBusy ? "󱍧" : "󱍧"
+                iconText: root.checkBusy ? "󰸳" : "󱍧"
                 radius: root.friendlyRadius
                 iconSpinning: root.checkBusy
                 foreground: root.bar.foreground
@@ -1339,7 +1339,7 @@ SoraDropdown {
               width: parent.width - Style.space(24)
               anchors.horizontalCenter: parent.horizontalCenter
               text: root.updateBusy ? "Updating…" : "Click to Update"
-              iconText: ""
+              iconText: "󰸳"
               radius: root.friendlyRadius
               iconSpinning: root.updateBusy
               foreground: root.bar.foreground
