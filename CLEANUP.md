@@ -14,18 +14,18 @@ find ~/.config ~/.local ~/.cache -name "*sorakey*" -o -name "*Sorakey*" -o -name
 | `~/.local/bin/sorakey` | Binary |
 | `~/.local/share/sorakey/` | Soundpacks |
 | `~/.local/share/sorakey.bak.*` | Old backups (`--purge` removes) |
-| `~/.local/lib/sorakey/` | Build cache |
+| `~/.local/lib/sorakey/` | Manual keyboard-permission revoke tool (kept by every removal) |
 | `~/.cache/sorakey/` | Temp cache |
 | `~/.config/sorakey/` | Panel prefs (logo, corners) |
 | `~/.config/systemd/user/sorakey.service` | Systemd service |
-| `/etc/udev/rules.d/70-sora-keyboard.rules` | Keyboard-access rule + live ACL (both revoked with one approval) |
+| `/etc/udev/rules.d/70-sora-keyboard.rules` | Keyboard-access rule + live ACL (kept by every removal — revoke with `sudo ~/.local/lib/sorakey/sora-keyboard-revoke.sh`) |
 | `$XDG_RUNTIME_DIR/sorakey.{sock,lock}` | Daemon runtime files |
 
-The panel's Uninstall button runs `sora-uninstall.sh --purge` (full wipe above)
-plus `omarchy plugin remove`. Removed via Omarchy's menu instead? Same
-standard: the daemon stops itself instantly and a helper wipes everything
-above (including the rule row) with one approval dialog — decline it and use
-the one-liner from `docs/keyboard-access.md`. Exported log files (your chosen location)
+The panel's Uninstall button runs `sora-uninstall.sh --purge` (full data wipe
+above, except the revoke tool) plus `omarchy plugin remove`. Removed via
+Omarchy's menu instead? Same standard: the daemon stops itself instantly and
+wipes the same data itself (no .bak). Both paths keep the keyboard permission
+(rule row) by design — reinstall or reboot re-asks nothing. Exported log files (your chosen location)
 are yours and are never deleted.
 
 ## Services to Check

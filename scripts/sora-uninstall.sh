@@ -11,33 +11,21 @@ echo "== Sorakey uninstall =="
 systemctl --user disable --now sorakey 2>/dev/null || true
 systemctl --user daemon-reload 2>/dev/null || true
 pkill -x sorakey 2>/dev/null || true
-# Revoke the full keyboard permission: the rule file AND the live ACL on the
-# keyboard node. The ACL outlives the rule file — removing only the rule leaves
-# a stale grant, so the daemon (which just probes "can I open
-# /dev/input/event*?") keeps reading after reinstall and never re-installs the
-# rule; the keyboard is then dead after the next reboot. Same one approval.
-has_live_acl() {
-  local d
-  for d in /dev/input/event*; do
-    [[ -e "$d" ]] || continue
-    udevadm info --query=property --name="$d" 2>/dev/null | grep -qx "ID_INPUT_KEYBOARD=1" || continue
-    getfacl -p "$d" 2>/dev/null | grep -q "^user:$(id -un):" && return 0
-  done
-  return 1
-}
-if [[ -f "$UDEV_RULE" || -f "$UDEV_RULE_LEGACY" ]] || has_live_acl; then
-  if command -v pkexec >/dev/null 2>&1; then
-    # Root paths travel as argv ($1/$2), never embedded in shell text.
-    # setfacl is scoped to keyboard nodes only — mice/touchpads keep theirs.
-    pkexec bash -c 'rm -f "$1" "$2"; udevadm control --reload-rules; udevadm trigger --subsystem-match=input --action=change; for d in /dev/input/event*; do [ -e "$d" ] || continue; if udevadm info --query=property --name="$d" 2>/dev/null | grep -qx "ID_INPUT_KEYBOARD=1"; then setfacl -b "$d" 2>/dev/null || true; fi; done' _ "$UDEV_RULE" "$UDEV_RULE_LEGACY" 2>/dev/null \
-      && echo "removed keyboard access (rule + live ACL)" \
-      || echo "kept keyboard access (approval declined) — remove with: pkexec rm $UDEV_RULE"
-  else
-    echo "kept keyboard access (no pkexec) — remove with: sudo rm $UDEV_RULE && sudo setfacl -b /dev/input/event*"
+# Keyboard permission is kept by design (same as menu removal): the udev rule
+# in /etc plus the live ACL survive, so a reinstall or reboot re-asks
+# nothing. Revoking needs root with a real terminal prompt, which neither the
+# panel nor the orphan self-clean can reliably produce — revoke manually with:
+#   sudo ~/.local/lib/sorakey/sora-keyboard-revoke.sh
+if [[ -f "$UDEV_RULE" || -f "$UDEV_RULE_LEGACY" ]]; then
+  echo "kept keyboard permission (rule + access remain) — revoke with: sudo ~/.local/lib/sorakey/sora-keyboard-revoke.sh"
+  if command -v omarchy-notification-send >/dev/null 2>&1; then
+    omarchy-notification-send --app-name Sorakey -u normal "Sorakey: keyboard permission kept" "Revoke anytime in a terminal with: sudo ~/.local/lib/sorakey/sora-keyboard-revoke.sh" 2>/dev/null || true
   fi
 fi
 if [[ $PURGE -eq 1 ]]; then
-  rm -rf "$HOME/.local/share/sorakey" "$HOME"/.local/share/sorakey.bak.* "$HOME/.local/bin/sorakey" "$HOME/.config/systemd/user/sorakey.service" "$HOME/.cache/sorakey" "$HOME/.local/lib/sorakey" "$HOME/.config/sorakey"
+  # NOTE: ~/.local/lib/sorakey is deliberately kept: it holds the manual
+  # keyboard-permission revoke tool (see above), which must outlive the plugin.
+  rm -rf "$HOME/.local/share/sorakey" "$HOME"/.local/share/sorakey.bak.* "$HOME/.local/bin/sorakey" "$HOME/.config/systemd/user/sorakey.service" "$HOME/.cache/sorakey" "$HOME/.config/sorakey"
   rm -f "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/sorakey.sock" "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/sorakey.lock" "$HOME/.sorakey.sock" "$HOME/.sorakey.lock"
   echo "purged data + binary + prefs + runtime files"
 else

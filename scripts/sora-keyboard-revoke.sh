@@ -1,17 +1,13 @@
 #!/bin/bash
-# sora-keyboard-revoke.sh — menu-deletion cleanup, launched by the daemon's
-# orphan self-clean (fully detached) after Omarchy deletes the plugin folder.
-# The plugin dir (where sora-uninstall.sh lives) is already gone then, so
-# this helper is staged at install time to ~/.local/lib/sorakey/ and runs
-# from there. Same standard as the panel's Uninstall button: full data wipe
-# (no .bak) + rule/ACL revoke with one approval (pkexec).
-#
-# Usage: sora-keyboard-revoke.sh [--self-clean]
-# --self-clean deletes the helper's own directory at the end (only the
-# daemon passes it; running the script by hand without the flag is safe).
+# sora-keyboard-revoke.sh — manual keyboard-permission revoke. Removal (panel
+# Uninstall or menu delete) deliberately KEEPS the permission: the udev rule
+# in /etc plus the live ACL survive, so a reinstall or reboot re-asks
+# nothing. Run this in a terminal whenever you want the permission itself
+# gone (one password, yours to type):
+#   sudo ~/.local/lib/sorakey/sora-keyboard-revoke.sh
+# Staged at install time to ~/.local/lib/sorakey/ so it outlives the plugin.
 set -euo pipefail
 : "${HOME:?HOME is unset, refusing to revoke}"
-SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UDEV_RULE="/etc/udev/rules.d/70-sora-keyboard.rules"
 UDEV_RULE_LEGACY="/etc/udev/rules.d/70-sorakey-keyboard.rules"
 SHARE="$HOME/.local/share/sorakey"
@@ -23,24 +19,41 @@ notify() {
   fi
 }
 
-# 1. Full data wipe first (user files, no approval needed). Even if the
-# pkexec below is declined, menu removal leaves no data behind.
+# Full data wipe first (user files, no approval needed).
 rm -rf "$SHARE" "$HOME"/.local/share/sorakey.bak.* "$HOME/.cache/sorakey" 2>/dev/null || true
 rm -f "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/sorakey.sock" "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/sorakey.lock" "$HOME/.sorakey.sock" "$HOME/.sorakey.lock" 2>/dev/null || true
 
-# 2. Rule + live ACL (needs one approval). Same argv-passing snippet as
-# sora-uninstall.sh; setfacl stays scoped to keyboard nodes only.
+# Rule + live ACL (needs one approval). As root (sudo) run directly — no
+# second dialog. Otherwise pkexec pops the GUI approval.
+revoke_as_root() {
+  local rule="$1" legacy="$2"
+  rm -f "$rule" "$legacy"
+  udevadm control --reload-rules
+  udevadm trigger --subsystem-match=input --action=change
+  local d
+  for d in /dev/input/event*; do
+    [ -e "$d" ] || continue
+    # setfacl stays scoped to keyboard nodes only — mice/touchpads keep theirs
+    if udevadm info --query=property --name="$d" 2>/dev/null | grep -qx "ID_INPUT_KEYBOARD=1"; then
+      setfacl -b "$d" 2>/dev/null || true
+    fi
+  done
+}
+
 revoked=0
 if [[ -f "$UDEV_RULE" || -f "$UDEV_RULE_LEGACY" ]]; then
-  if command -v pkexec >/dev/null 2>&1; then
-    pkexec bash -c 'rm -f "$1" "$2"; udevadm control --reload-rules; udevadm trigger --subsystem-match=input --action=change; for d in /dev/input/event*; do [ -e "$d" ] || continue; if udevadm info --query=property --name="$d" 2>/dev/null | grep -qx "ID_INPUT_KEYBOARD=1"; then setfacl -b "$d" 2>/dev/null || true; fi; done' _ "$UDEV_RULE" "$UDEV_RULE_LEGACY" 2>/dev/null && revoked=1 || true
+  if [[ "$(id -u)" == "0" ]]; then
+    revoke_as_root "$UDEV_RULE" "$UDEV_RULE_LEGACY" && revoked=1 || true
+  elif command -v pkexec >/dev/null 2>&1; then
+    # Function body travels via declare -f (never embedded in shell text);
+    # paths travel as argv ($1/$2), never embedded either.
+    pkexec bash -c 'eval "$1"; revoke_as_root "$2" "$3"' _ "$(declare -f revoke_as_root)" "$UDEV_RULE" "$UDEV_RULE_LEGACY" 2>/dev/null && revoked=1 || true
   fi
   if [[ "$revoked" == 0 ]]; then
-    notify "Sorakey: keyboard permission kept" "Approval declined — revoke it with: pkexec rm $UDEV_RULE"
+    notify "Sorakey: keyboard permission kept" "Approval declined — revoke it with: sudo ~/.local/lib/sorakey/sora-keyboard-revoke.sh"
+  else
+    echo "revoked keyboard permission (rule + live ACL)"
   fi
-fi
-
-# 3. Self-delete: nothing of the plugin may survive menu removal.
-if [[ "${1:-}" == "--self-clean" ]]; then
-  rm -rf "$SELF_DIR"
+else
+  echo "no keyboard permission installed — nothing to revoke"
 fi

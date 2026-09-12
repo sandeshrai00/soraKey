@@ -28,9 +28,9 @@ step() { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 note() { printf '%s\n' "$*"; }
 
 # Consent note: playback additionally requires this file (uid + timestamp).
-# sora-uninstall purges it and the orphan self-clean deletes it, so any
-# removal revokes consent and reinstall re-asks — even if the OS grant
-# silently survived. Never fails the script (best effort).
+# Removal deletes it, but the OS grant survives by design — so after a
+# reinstall the early exit below re-writes it silently (no dialog) whenever
+# the keyboard is already readable. Never fails the script (best effort).
 write_consent() {
   mkdir -p "$(dirname "$CONSENT_FILE")" 2>/dev/null || true
   printf '%s %s\n' "$(id -u)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$CONSENT_FILE" 2>/dev/null || true

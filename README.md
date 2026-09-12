@@ -144,10 +144,11 @@ final `omarchy restart shell` drops the bar icon.
 
 > Removed via Omarchy's own menu instead (`plugin → remove`)? Same standard as
 > Uninstall: the daemon notices its checkout is gone the instant it happens
-> (kernel event) and stops itself, then a staged helper wipes all data (no
-> .bak) and revokes the keyboard permission with one approval dialog. Decline
-> the dialog and the keyboard rule stays — revoke it with the one-liner in
-> `docs/keyboard-access.md`.
+> (kernel event) and stops itself, wiping all data (no .bak). The keyboard
+> permission is kept by design — reinstall or reboot re-asks nothing. Revoke
+> the permission itself anytime in a terminal with:
+> `sudo ~/.local/lib/sorakey/sora-keyboard-revoke.sh` (see
+> `docs/keyboard-access.md`).
 
 ## Import a soundpack
 

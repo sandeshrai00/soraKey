@@ -25,9 +25,9 @@ if [[ -f "$MARKER" ]]; then
   old_id=$(cat "$MARKER" 2>/dev/null || true)
   new_id=$(stat -c '%d:%i' "$PLUGIN_DIR" 2>/dev/null || true)
   if [[ -n "$old_id" && -n "$new_id" && "$old_id" != "$new_id" ]]; then
-    echo "note: previous install was removed without cleanup (keyboard permission and data may remain)" >&2
+    echo "note: previous install was removed; keyboard permission is kept by design, no approval needed" >&2
     if command -v omarchy-notification-send >/dev/null 2>&1; then
-      omarchy-notification-send --app-name Sorakey -u normal "Sorakey: previous install was removed" "Keyboard permission and data may remain — revoke with: pkexec rm /etc/udev/rules.d/70-sora-keyboard.rules" 2>/dev/null || true
+      omarchy-notification-send --app-name Sorakey -u normal "Sorakey: keyboard permission kept" "No approval needed. Revoke anytime in a terminal with: sudo ~/.local/lib/sorakey/sora-keyboard-revoke.sh" 2>/dev/null || true
     fi
   fi
 fi

@@ -534,8 +534,9 @@ Panel {
   }
 
   function remove() {
-    // full wipe: the script removes binary, unit, packs, config, caches,
-    // runtime files and the keyboard-access rule, then we unregister.
+    // full data wipe: the script removes binary, unit, packs, config,
+    // caches and runtime files (keyboard permission is kept by design),
+    // then we unregister.
     if (root.uninstallBusy || uninstallProc.running) return
     if (setupBusy || setupProc.running) return // never uninstall mid-install
     root.uninstallBusy = true
@@ -777,8 +778,8 @@ Panel {
     }
   }
 
-  // runs sora-uninstall.sh --purge in background (pkexec inside pops the GUI
-  // approval for the rule removal, like the enable flow)
+  // runs sora-uninstall.sh --purge in background (data wipe only — the
+  // keyboard permission is kept by design, same as menu removal)
   Process {
     id: uninstallProc
     stdout: StdioCollector { waitForEnd: true }
