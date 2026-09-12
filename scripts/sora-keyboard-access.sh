@@ -22,19 +22,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(dirname "$SCRIPT_DIR")"
 SRC="$PLUGIN_DIR/udev/70-sora-keyboard.rules"
 DST="/etc/udev/rules.d/70-sora-keyboard.rules"
-CONSENT_FILE="$HOME/.local/share/sorakey/keyboard-granted"
 
 step() { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 note() { printf '%s\n' "$*"; }
-
-# Consent note: playback additionally requires this file (uid + timestamp).
-# Removal deletes it, but the OS grant survives by design — so after a
-# reinstall the early exit below re-writes it silently (no dialog) whenever
-# the keyboard is already readable. Never fails the script (best effort).
-write_consent() {
-  mkdir -p "$(dirname "$CONSENT_FILE")" 2>/dev/null || true
-  printf '%s %s\n' "$(id -u)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$CONSENT_FILE" 2>/dev/null || true
-}
 
 [[ -f "$SRC" ]] || { echo "sora-keyboard-access: rule source missing: $SRC" >&2; exit 1; }
 
@@ -102,7 +92,6 @@ if user_can_read_keyboard; then
   if [[ -f "$DST" ]] && ! cmp -s "$SRC" "$DST"; then
     note "Installed permission is outdated — it refreshes on next approval."
   fi
-  write_consent
   exit 0
 fi
 note "Keyboard permission needed for sounds."
@@ -140,7 +129,6 @@ step "Checking"
 for ((i = 0; i < 10; i++)); do
   if user_can_read_keyboard; then
     note "Done. Type to hear sounds."
-    write_consent
     exit 0
   fi
   sleep 1

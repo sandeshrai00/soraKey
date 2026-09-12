@@ -60,8 +60,7 @@ fn notify_permission_kept() {
         .status();
 }
 
-/// Stop + disable our own unit, wipe data, delete unit + binary + consent
-/// note, then exit(0).
+/// Stop + disable our own unit, wipe data, delete unit + binary, then exit(0).
 /// exit(0) is load-bearing: Restart=on-failure must NOT revive us.
 fn self_clean() {
     crate::always_print!("sorakey: plugin checkout gone — removing orphaned daemon");
@@ -69,13 +68,7 @@ fn self_clean() {
         .args(["--user", "disable", UNIT])
         .status();
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        for rel in [
-            ".config/systemd/user/sorakey.service",
-            ".local/bin/sorakey",
-            // consent note: reinstall re-writes it silently via the Enable
-            // early exit when the kept OS grant is still readable
-            ".local/share/sorakey/keyboard-granted",
-        ] {
+        for rel in [".config/systemd/user/sorakey.service", ".local/bin/sorakey"] {
             let p = home.join(rel);
             match std::fs::remove_file(&p) {
                 Ok(()) => crate::always_print!("sorakey: removed {}", p.display()),
