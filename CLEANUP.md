@@ -23,7 +23,7 @@ find ~/.config ~/.local ~/.cache -name "*sorakey*" -o -name "*Sorakey*" -o -name
 
 The panel's Uninstall button runs `sora-uninstall.sh --purge` (full wipe above)
 plus `omarchy plugin remove`. Removed via Omarchy's menu instead? The daemon
-self-cleans (unit + binary) within ~30s of the checkout disappearing — the
+self-cleans (unit + binary) the instant the checkout disappears — the
 rule row above still needs the manual one-liner. Exported log files (your chosen location)
 are yours and are never deleted.
 
