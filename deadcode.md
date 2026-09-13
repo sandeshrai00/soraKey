@@ -37,6 +37,7 @@ cmd (see 1c).
 | cache write calls (`update_soundpack_cache` / `capture_soundpack_loading_error`) | libs/player.rs:564, 567 |
 | `update_cache_on_error` field on `AudioCommand::LoadKeyboardPack` — exists only to steer the dead cache (not wire-serialized; crossbeam in-process) | libs/player.rs:39, 557, 566, 591, 616, 625 + call sites commands.rs:380, 530, 538 |
 | cache block in `delete_pack` (lock + remove + save, with its comment) | commands.rs:488-492 |
+| `pub mod pack_info;` | utils/mod.rs:9 | dies with the file |
 | `soundpack_cache_json()` | state/folders.rs:30 |
 
 **`SoundPack` struct slimming** (state/packs.rs:62-89): keep only fields with
@@ -84,6 +85,7 @@ maintain a field no consumer reads.
 | `data_equals` line | state/settings.rs:159 |
 | sync block (the per-boot `systemctl` probe) | state/settings.rs:213-233 |
 | `utils/auto_start.rs` — **entire file** | — |
+| `pub mod auto_start;` | utils/mod.rs:1 | dies with the file |
 | 5 test references to the field | state/settings_saver.rs:104-106, 118, 138-150, 286, 316-317 |
 
 Old `config.json` files that still contain `auto_start` keep loading (lenient
@@ -216,6 +218,10 @@ dropdowns + textfield render identically.
    unsupported arch it downloads an unrunnable binary with no warning. Not
    dead code; optional hardening to fail loudly. Default: **leave** (separate
    change if wanted).
+6. **Duplicate `recommended_volume_for`** — byte-identical 9-line fn in
+   commands.rs:320 and player.rs:702 (both read `options.recommended_volume`
+   from the pack's config.json). Both callers live — merge candidate (one
+   helper in `utils`), not dead code. Default: **leave** (separate refactor).
 
 ## Verified NOT dead (checked, left alone)
 
@@ -244,6 +250,14 @@ dropdowns + textfield render identically.
   runs in CI via the old_pack_fixer parity test).
 - `SoraAppStore.qml`: every store field + derived prop is read by a view.
 - QML fork-duplication (Phase 2 KEEP list).
+- Completeness pass (post-audit): `libs/names.rs` (alive — `qualify_soundpack_id`
+  used by commands.rs), `utils/printer.rs` (alive — it IS the `always_print!`
+  macro family), `utils/version.rs` (alive — `APP_VERSION` read by logs.rs),
+  `tests/version_check.rs` (alive — enforces the version-match rule), and the
+  6 bundled soundpacks in `daemon/soundpacks/keyboard/` (data, not code —
+  `BUNDLED_PACKS` const at commands.rs:553-560 matches disk exactly, 6 = 6).
+  All 93 tracked files are now accounted for; the 9 .md files are excluded
+  per audit scope (1 flagged for deletion: `ssss.md`).
 
 ## Execution order
 
@@ -251,7 +265,7 @@ dropdowns + textfield render identically.
 2. Phase 2 (QML/JS) → Phase 2 gate (shell restart, panel pass)
 3. Phase 3 (scripts) → Phase 3 gate (bash -n + uninstall sim)
 4. Phase 4 (hygiene)
-5. Resolve flagged items 1-5
+5. Resolve flagged items 1-6
 6. Bump 0.1.9 → **0.1.10** (manifest.json + daemon/Cargo.toml +
    daemon/Cargo.lock — daemon `.rs` changed, release rule requires tag)
 7. User: commit → `git tag v0.1.10` → push → CI →
