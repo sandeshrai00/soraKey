@@ -40,7 +40,7 @@ Keyboard permission (`/etc/udev/rules.d/70-sora-keyboard.rules`) is kept by desi
 
 ## Acknowledgements
 
-Daemon audio core is derived from [MechvibesDX v0.8.2](https://github.com/hainguyents13/mechvibes-dx) by Hai Nguyen. Forked as a headless daemon with anti-click fades, resampling and V2 soundpack format — GUI, tray, telemetry and auto-updater removed.
+Daemon audio core is derived from [MechvibesDX](https://github.com/hainguyents13/mechvibes-dx) by Hai Nguyen. Forked as a headless daemon with anti-click fades, resampling and V2 soundpack format — GUI, tray, telemetry and auto-updater removed.
 
 ## License
 

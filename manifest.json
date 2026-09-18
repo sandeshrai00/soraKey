@@ -4,7 +4,7 @@
   "name": "Sorakey",
   "version": "0.1.1",
   "author": "sandeshrai00",
-  "description": "Mechanical keyboard sounds driven by the sorakey daemon: live mute, volume and soundpack controls.",
+  "description": "Type like you mean it — rich mechanical sounds for your Omarchy",
   "license": "MIT",
   "activation": "on-demand",
   "kinds": [
