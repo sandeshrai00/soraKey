@@ -1,0 +1,19 @@
+# Sorakey: keyboard capture without the `input` group or a logout.
+#
+# systemd's own 70-uaccess.rules grants the active-session user ACL access to
+# joysticks etc. via TAG+="uaccess", but deliberately excludes keyboards.
+# This scoped rule opts keyboards back in for local sessions: logind adds a
+# per-user ACL on the keyboard event nodes, so the sorakey daemon can read
+# keystrokes as the user.
+#
+# Scope notes:
+# - Matches only devices identified as keyboards (ID_INPUT_KEYBOARD==1):
+#   mice, touchpads and buttons are untouched.
+# - Grants access to the *active session user only* (uaccess), not everyone.
+# - Takes effect on `udevadm trigger` — no reboot, no logout.
+#
+# Filename ordering matters: this must sort BEFORE 73-seat-late.rules, whose
+# `TAG=="uaccess", RUN{builtin}+="uaccess"` line is what actually writes the
+# ACL at event time. A 90-* name would add the tag after that line already
+# ran — tagged but never granted.
+ACTION=="add|change", SUBSYSTEM=="input", ENV{ID_INPUT_KEYBOARD}=="1", TAG+="uaccess"

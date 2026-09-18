@@ -1,0 +1,104 @@
+#!/bin/bash
+# Sorakey installer — installs daemon (verified prebuilt only), installs
+# soundpacks, starts service.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_DIR="$(dirname "$SCRIPT_DIR")"
+DAEMON_DIR="$PLUGIN_DIR/daemon"
+
+BIN="$HOME/.local/bin/sorakey"
+SHARE="$HOME/.local/share/sorakey"
+UNIT_DIR="$HOME/.config/systemd/user"
+UNIT="$UNIT_DIR/sorakey.service"
+
+step() { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
+die()  { printf '\n\033[1;31msora-install: %s\033[0m\n' "$*" >&2; exit 1; }
+
+# Stale-install check: the marker records this path's filesystem identity
+# (dev:ino) at install time. If it differs now, the directory was deleted
+# and recreated — a previous install was removed externally (menu remove
+# while the daemon was stopped) without cleanup. Notify only: a heuristic
+# must never auto-wipe data.
+MARKER="$SHARE/.installed-from"
+if [[ -f "$MARKER" ]]; then
+  old_id=$(cat "$MARKER" 2>/dev/null || true)
+  new_id=$(stat -c '%d:%i' "$PLUGIN_DIR" 2>/dev/null || true)
+  if [[ -n "$old_id" && -n "$new_id" && "$old_id" != "$new_id" ]]; then
+    echo "note: previous install was removed; keyboard permission is kept by design, no approval needed" >&2
+    if command -v omarchy-notification-send >/dev/null 2>&1; then
+      omarchy-notification-send --app-name Sorakey -u normal "Sorakey: keyboard permission kept" "No approval needed. Revoke anytime in a terminal with: sudo ~/.local/lib/sorakey/sora-keyboard-revoke.sh" 2>/dev/null || true
+    fi
+  fi
+fi
+
+# 1. Install daemon (verified prebuilt only — never compiled here)
+[[ -d "$DAEMON_DIR" ]] || die "daemon/ not found next to this script"
+step "Installing sorakey (verified prebuilt only)"
+"$PLUGIN_DIR/scripts/sora-build.sh" || die "prebuilt install failed — see the reason above (no prebuilt for this source yet, or no network)"
+[[ -x "$BIN" ]] || die "build reported success but $BIN is missing/not executable"
+
+# 2. Install soundpacks
+step "Installing soundpacks"
+mkdir -p "$SHARE/soundpacks"
+# -n never clobbers user/imported packs; failures here must be loud —
+# a silent partial copy used to install a daemon with missing audio.
+cp -rn "$DAEMON_DIR/soundpacks/." "$SHARE/soundpacks/" || die "soundpack copy failed (disk full or permissions on $SHARE/soundpacks)"
+# verify at least one usable pack (empty pack dir = silent daemon)
+if ! find "$SHARE/soundpacks/keyboard" -maxdepth 2 -name config.json -print -quit 2>/dev/null | grep -q .; then
+  die "no soundpacks with config.json under $SHARE/soundpacks/keyboard"
+fi
+echo "soundpacks: $(find "$SHARE/soundpacks/keyboard" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l) keyboard pack(s) installed"
+
+# 3. systemd service
+step "Installing the sorakey user service"
+mkdir -p "$UNIT_DIR"
+  cat > "$UNIT" <<EOF
+[Unit]
+Description=Sorakey keyboard sound daemon
+After=default.target pipewire-pulse.service
+Wants=pipewire-pulse.service
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+Environment="SORA_PLUGIN_HOME=$PLUGIN_DIR"
+ExecStart=%h/.local/bin/sorakey
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload
+# Drop any enabled state (legacy installs used enable --now: the leftover
+# symlink resurrects the daemon at login with the plugin disabled), then
+# start. The daemon's lifecycle is owned by the plugin's shell service, not
+# by the boot target.
+systemctl --user disable sorakey 2>/dev/null || true
+systemctl --user start sorakey || die "could not start the sorakey service (see: journalctl --user -u sorakey)"
+if ! systemctl --user is-active --quiet sorakey; then
+  die "sorakey service installed but not active (see: journalctl --user -u sorakey)"
+fi
+
+# 4. keyboard capture is granted from the panel ("Enable keyboard sounds"):
+# one GUI approval, no terminal. Report only — the daemon's own status is
+# the source of truth the panel displays.
+step "Checking keyboard capture"
+if "$BIN" ctl '{"cmd":"status"}' 2>/dev/null | grep -q '"input_error":null'; then
+  echo "keyboard capture: OK"
+else
+  echo "keyboard capture: not yet granted — open the Sorakey panel to enable it"
+fi
+
+if command -v omarchy >/dev/null 2>&1; then
+  echo "Bar icon position: configure anytime in Sorakey panel → POSITION (or: omarchy plugin enable io.github.sandeshrai00.sorakey --section left|center|right)"
+fi
+
+step "Done"
+echo "Sorakey is installed and running. Open the Sorakey bar panel to tune it."
+echo "Type a few keys — you should hear them."
+# record this install's identity for the stale check above (written only on
+# success; a failed install keeps the old marker and re-notifies next time)
+stat -c '%d:%i' "$PLUGIN_DIR" > "$MARKER" 2>/dev/null || true

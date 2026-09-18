@@ -1,0 +1,118 @@
+name: release-sorakey
+on:
+  push:
+    # Manual versioned tags only — no auto-build on main. Every daemon
+    # change must be followed by a bump + `git tag vX.Y.Z` or installs
+    # block until the tag exists (prebuilt-only policy, no fallback).
+    tags: ["v*"]
+  # Manual re-run escape hatch (Actions → release-sorakey → Run workflow):
+  # re-runs checks on main without publishing. Publishing still needs a tag.
+  workflow_dispatch:
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - arch: aarch64
+            target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate release identity
+        # Every remaining trigger IS a tag: tag must == manifest ==
+        # daemon/Cargo.toml version, toolchain must be 1.87. Always enforced.
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version=$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])')
+          test "$RELEASE_TAG" = "v$version"
+          cargo_ver=$(python3 -c 'import tomllib; print(tomllib.load(open("daemon/Cargo.toml","rb"))["package"]["version"])')
+          test "$cargo_ver" = "$version" || { echo "daemon/Cargo.toml ($cargo_ver) != manifest.json ($version)" >&2; exit 1; }
+          toolchain=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml","rb"))["toolchain"]["channel"])')
+          test "$toolchain" = "1.87" || { echo "rust-toolchain.toml ($toolchain) != CI toolchain (1.87)" >&2; exit 1; }
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master as of 2026-09-04 (no version tags upstream)
+        with:
+          toolchain: "1.87"
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libx11-dev libevdev-dev libxtst-dev libxi-dev pkg-config
+      - name: Test + lint (fail the release on red)
+        run: |
+          cargo test --locked --manifest-path daemon/Cargo.toml
+          cargo clippy --locked --manifest-path daemon/Cargo.toml --all-targets -- -D warnings
+          cargo fmt --manifest-path daemon/Cargo.toml -- --check
+      - name: Build sorakey ${{ matrix.arch }}
+        run: |
+          cargo build --locked --release --manifest-path daemon/Cargo.toml --target ${{ matrix.target }}
+          mkdir -p dist
+          cp daemon/target/${{ matrix.target }}/release/sorakey dist/sorakey-${{ matrix.arch }}
+          (cd dist && sha256sum sorakey-${{ matrix.arch }} > SHA256SUMS-${{ matrix.arch }})
+          cat dist/SHA256SUMS-${{ matrix.arch }}
+      - name: Record built source hash
+        # The exact content stream sora-build.sh hashes on user machines
+        # (relative paths from the repo root, LC_ALL=C sort). The installer
+        # trusts a prebuilt ONLY when this matches its local source — this
+        # is what makes stale-asset installs impossible.
+        run: |
+          export LC_ALL=C
+          { find daemon -path daemon/target -prune -o \( -name "Cargo.toml" -o -name "Cargo.lock" -o -name "*.rs" \) -print0; printf '%s\0' "rust-toolchain.toml"; } | sort -z | xargs -0 cat | sha256sum | cut -d' ' -f1 > dist/source.sha256
+          cat dist/source.sha256
+      - name: Attest binary
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-path: "dist/sorakey-${{ matrix.arch }}"
+      - name: Attest checksums
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-path: "dist/SHA256SUMS-${{ matrix.arch }}"
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sorakey-${{ matrix.arch }}
+          path: |
+            dist/sorakey-${{ matrix.arch }}
+            dist/SHA256SUMS-${{ matrix.arch }}
+            dist/source.sha256
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Download artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+      - name: Merge SHA256SUMS
+        run: |
+          cat dist/sorakey-*/SHA256SUMS-x86_64 dist/sorakey-*/SHA256SUMS-aarch64 > dist/SHA256SUMS
+          sed -i 's|dist/||g' dist/SHA256SUMS
+          sort -u -o dist/SHA256SUMS dist/SHA256SUMS
+          # download-artifact unpacks to dist/sorakey-*/source.sha256, not
+          # dist/source.sha256 — materialize the expected path (softprops
+          # silently skips missing globs, which is how v0.1.1 lost the file).
+          cp dist/sorakey-x86_64/source.sha256 dist/source.sha256
+          cat dist/SHA256SUMS
+          cat dist/source.sha256
+      - name: Create Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: |
+            dist/sorakey-x86_64/sorakey-x86_64
+            dist/sorakey-aarch64/sorakey-aarch64
+            dist/source.sha256
+            dist/SHA256SUMS
+          generate_release_notes: true

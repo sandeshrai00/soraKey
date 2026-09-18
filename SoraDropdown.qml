@@ -1,0 +1,235 @@
+import QtQuick
+import QtQuick.Controls
+import qs.Commons
+import qs.Ui
+
+// Themed single-select dropdown. Trigger row paints with the kit's focus
+// chrome; the popup anchors below and uses Color.popups.background +
+// Color.popups.border so it reads as a panel surface rather than the
+// platform-native ComboBox look.
+//
+// `options` is an array of { value, label } objects (label is what we
+// render; value is what we emit).
+//
+// Keyboard: Tab to focus the trigger, Enter/Space opens, Esc closes,
+// j/k or Up/Down walks options inside the open popup, Enter selects.
+// A sibling SoraPackPicker reuses the same visuals but adds an
+// embedded filter input — keep the two separate so each stays simple.
+// Sorakey fork of Omarchy's shell Dropdown: identical except trigger,
+// popup background, and row highlights use a friendly radius floor
+// (Style.cornerRadius mirrors Hyprland rounding and can be 0).
+// Follows the Rounded-corners toggle; off = theme default.
+// Re-sync with shell/Ui/Dropdown.qml on shell updates.
+Item {
+  id: root
+
+  property bool roundedCorners: false
+  readonly property int friendlyRadius: root.roundedCorners ? Math.max(Style.cornerRadius, 12) : Style.cornerRadius
+
+  property string value: ""
+  property var options: []
+
+  property color foreground: Color.popups.text
+  property color popupBorder: Color.popups.border
+  readonly property var popupBorderSpec: Border.localOrSurfaceSpec("popups", "border", popupBorder, Color.popups.border, Style.normalBorderWidth)
+  property int rowHeight: Style.spacing.controlHeight
+
+  // popupOpen + open()/close() let a parent panel know when the
+  // dropdown owns keys (its embedded ListView is active) and suspend its
+  // own keyCatcher so j/k inside the popup don't double-drive the panel
+  // cursor.
+  readonly property bool popupOpen: popup.opened
+  function open() { popup.open() }
+  function close() { popup.close() }
+
+  signal changed(string value)
+
+  function optionValue(o) { return String(o.value) }
+  function optionLabel(o) { return String(o.label) }
+  function currentLabel() {
+    for (var i = 0; i < options.length; i++) {
+      if (optionValue(options[i]) === value) return optionLabel(options[i])
+    }
+    return value
+  }
+
+  implicitWidth: Style.spacing.dropdownWidth
+  implicitHeight: rowHeight
+
+  Column {
+    anchors.fill: parent
+    spacing: Style.spacing.labelGap
+
+    BorderSurface {
+      id: trigger
+      width: parent.width
+      height: root.rowHeight
+      radius: root.friendlyRadius
+
+      readonly property bool _focused: trigger.activeFocus
+      readonly property bool _hot: triggerHover.hovered
+      readonly property var _borderSpec: Border.controlSpec(trigger._focused ? "focus" : (trigger._hot ? "hover-cursor" : "normal"), root.foreground, Color.accent)
+
+      color: Style.controlFill(trigger._focused, trigger._hot, root.foreground, Color.accent)
+      borderSpec: _borderSpec
+
+      activeFocusOnTab: true
+
+      HoverHandler { id: triggerHover }
+
+      Keys.onPressed: function(event) {
+        if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+            || event.key === Qt.Key_Space || event.key === Qt.Key_Down) {
+          popup.opened ? popup.close() : popup.open()
+          event.accepted = true
+        } else if (event.key === Qt.Key_Escape && popup.opened) {
+          popup.close(); event.accepted = true
+        }
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        anchors.left: parent.left
+        anchors.right: chevron.left
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.leftMargin: trigger.borderLeft + Style.spacing.controlPaddingX
+        anchors.rightMargin: trigger.borderRight + Style.spacing.md
+        text: root.currentLabel()
+        color: root.foreground
+        font.family: Style.font.family
+        font.pixelSize: Style.font.body
+        elide: Text.ElideRight
+      }
+
+      Text {
+        id: chevron
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.rightMargin: trigger.borderRight + Style.spacing.controlGap
+        text: "󰅀"
+        color: Qt.darker(root.foreground, 1.2)
+        font.family: Style.font.family
+        font.pixelSize: Style.font.body
+      }
+
+      // ponytail: inner MouseArea covered by panel overlay MouseAreas (SoraWidget bar/audio drops) — moving press-toggle + 300ms debounce inside needs shared lastClosedAt; keep until unified toggle lives in component
+      MouseArea {
+        anchors.fill: parent
+        cursorShape: Qt.PointingHandCursor
+        onClicked: {
+          trigger.forceActiveFocus()
+          popup.opened ? popup.close() : popup.open()
+        }
+      }
+
+      Popup {
+        id: popup
+        x: 0
+        y: trigger.height + Style.spacing.xxs
+        width: trigger.width
+        implicitHeight: Math.min(root.options.length * Style.spacing.popupRowHeight + Math.max(0, root.options.length - 1) * Style.spacing.labelGap + Style.spacing.xxs,
+                                 Style.spacing.popupRowHeight * 8 + 7 * Style.spacing.labelGap + Style.spacing.xxs)
+        padding: Style.spacing.hairline
+        leftPadding: Border.left(root.popupBorderSpec) + Style.spacing.hairline
+        rightPadding: Border.right(root.popupBorderSpec) + Style.spacing.hairline
+        topPadding: Border.top(root.popupBorderSpec) + Style.spacing.hairline
+        bottomPadding: Border.bottom(root.popupBorderSpec) + Style.spacing.hairline
+        focus: true
+
+        background: BorderSurface {
+          color: Color.popups.background
+          borderSpec: root.popupBorderSpec
+          radius: root.friendlyRadius
+        }
+
+        onOpened: {
+          optionList.currentIndex = Math.max(0, optionList.indexOfValue(root.value))
+          optionList.forceActiveFocus()
+        }
+
+                Text {
+          textFormat: Text.PlainText
+          anchors.centerIn: parent
+          visible: root.options.length === 0
+          text: "No options"
+          color: Qt.darker(root.foreground, 1.6)
+          font.family: Style.font.family
+          font.pixelSize: Style.font.body
+        }
+
+        contentItem: ListView {
+          id: optionList
+          spacing: root.roundedCorners ? Style.spacing.sm : Style.spacing.labelGap
+          Keys.priority: Keys.BeforeItem
+          Keys.onPressed: function(event) {
+            if (event.key === Qt.Key_Escape) { popup.close(); event.accepted = true }
+            else if (event.key === Qt.Key_Down || event.text === "j") {
+              optionList.currentIndex = Math.min(root.options.length - 1, optionList.currentIndex + 1)
+              event.accepted = true
+            } else if (event.key === Qt.Key_Up || event.text === "k") {
+              optionList.currentIndex = Math.max(0, optionList.currentIndex - 1)
+              event.accepted = true
+            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+              optionList.selectCurrent(); event.accepted = true
+            }
+          }
+          implicitHeight: contentHeight
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          model: root.options
+          currentIndex: -1
+
+          function indexOfValue(v) {
+            for (var i = 0; i < root.options.length; i++)
+              if (root.optionValue(root.options[i]) === v) return i
+            return -1
+          }
+
+          function selectCurrent() {
+            if (currentIndex < 0 || currentIndex >= root.options.length) return
+            var v = root.optionValue(root.options[currentIndex])
+            // no root.value = v: parent owns `value` (binding to the store
+            // or live config) and writes it back in onChanged. Assigning
+            // here would sever the binding and freeze the label.
+            root.changed(v)
+            popup.close()
+          }
+
+          delegate: Rectangle {
+            required property var modelData
+            required property int index
+            width: optionList.width
+            height: Style.spacing.popupRowHeight
+            radius: root.friendlyRadius
+            clip: true
+            color: index === optionList.currentIndex
+              ? Style.hoverFillFor(root.foreground, Color.accent)
+              : "transparent"
+
+            Text {
+              textFormat: Text.PlainText
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.leftMargin: Style.spacing.controlPaddingX
+              anchors.rightMargin: Style.spacing.controlPaddingX
+              text: root.optionLabel(modelData)
+              color: index === optionList.currentIndex ? Style.hoverStateColor(root.foreground, Color.accent) : root.foreground
+              font.family: Style.font.family
+              font.pixelSize: Style.font.body
+              elide: Text.ElideRight
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onPositionChanged: optionList.currentIndex = parent.index
+              onClicked: optionList.selectCurrent()
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,226 @@
+# Sorakey
+
+Mechanical keyboard sounds for Omarchy, driven by a lean Rust
+daemon. A keyboard icon on the bar opens a panel with live mute, volume,
+and soundpack picker; right-click the icon to mute, scroll to
+set volume.
+
+## What it is
+
+- **`sorakey`** — a headless sound daemon forked from the [MechvibesDX](https://github.com/hainguyents13/mechvibes-dx)
+  v0.8.2 audio core: same polyphonic engine, anti-click fades, resampler and
+  V2 soundpack format, with all of the GUI, tray, telemetry and auto-updater
+  removed. It runs as a `systemd` user service, idles at ~0% CPU and ~40 MB RAM,
+  and is controlled over a Unix socket.
+- **The Omarchy plugin** — a bar widget + panel that installs the daemon
+  (one click) and controls it live.
+
+## Install
+
+```sh
+omarchy plugin add https://github.com/sandeshrai00/soraKey.git --enable
+```
+
+1. Open the Sorakey panel on your bar and click **Install Sorakey**. It installs
+   `sorakey` and starts the service. The installer is **prebuilt-only** (a few
+   seconds): it verifies the release checksum, and when `gh` is logged in (or
+   `GH_TOKEN` is set) also the GitHub attestation proving CI built it from the
+   tagged commit. Without a `gh` login the checksum check alone is accepted.
+   It never compiles from source in normal use — if no prebuilt matches the
+   current source, the installer refuses loudly (set `SORAKEY_ALLOW_SOURCE=1`
+   for local builds, developers only).
+2. For **keyboard** sounds the panel shows a **keyboard-access step**.
+   Tap **Enable keyboard sounds** and approve the one-time system dialog
+   (password or fingerprint). This installs one rule for **keyboards only**
+    (`/etc/udev/rules.d/70-sora-keyboard.rules`) — no logout, no restart,
+   no terminal. Sounds start within seconds. Why this is needed and how
+   removal works: `docs/keyboard-access.md`.
+
+## Usage
+
+- **Left-click** the keyboard icon → panel: mute switch, per-pack volume
+  slider, soundpack dropdown (search, delete), **Random**, **Import Sound**,
+  **Open Folder**, a live **Test typing** box, and Start/Stop/Restart.
+- **Right-click** → toggle mute. **Scroll** on the icon → volume.
+- **Ctrl+Alt+M** → global mute, from anywhere (system-wide hotkey).
+- **Escape** closes the panel, **Tab** / **Shift+Tab** switches panels.
+- **Settings** (gear in the panel header): bar icon position, audio output
+  device, and **Export error logs** (saves a report via a GTK save dialog).
+
+The volume slider is **per soundpack**: each pack keeps its own level, and
+clicking the percentage label resets it to that pack's recommended default.
+Packs whose `config.json` sets `options.recommended_volume` start at that
+level automatically.
+
+## Output device
+
+Settings → **AUDIO OUTPUT** lists the system's output devices (plus
+**System default**). Pick one to route keyboard sounds there; **Rescan
+devices** refreshes the list. The choice persists and is reported by
+`status` as `audio_device`.
+
+**System default follows your OS**: if the default sink changes (e.g. you
+plug in a headset that becomes the default), the daemon reopens its stream
+on the new sink within seconds — no restart needed. An explicitly picked
+device is retried for ~60s when missing at startup (headsets that appear
+late after boot), then falls back to the default and says so. `status`
+also reports `audio_device_opened` — what the live stream is actually on —
+so the shown selection can never silently disagree with reality.
+Unplugging the selected device still goes quiet by design; reselect in
+Settings.
+
+## Configure
+
+```sh
+omarchy bar move io.github.sandeshrai00.sorakey --section center
+```
+
+Mute, volume and soundpack persist across restarts
+(`~/.local/share/sorakey/data/config.json`); the icon section persists across
+disable/re-enable.
+
+## Auto-start
+
+The daemon is a `systemd` user service, **disabled** by design — it never
+`enable`s. Auto-start is the shell service's `systemctl --user start sorakey`
+(`SoraService.qml:225-241`): the panel's **Stop** writes `~/.local/share/sorakey/stopped`
+and stops the unit; **Start** clears the flag and starts it. The unit stays
+`disabled` so a reboot or `omarchy plugin disable` never resurrects it.
+
+## Update
+
+Button flow: open the Sorakey panel → **Check for Update** (asks GitHub
+once — the plugin never checks on its own) → if something is new, an
+**Update Sorakey** button appears → click it.
+
+Terminal flow (same result):
+
+```sh
+omarchy plugin update io.github.sandeshrai00.sorakey --yes
+```
+
+then Check for Update in the panel (it will say "Update ready to apply")
+or just `omarchy restart shell`.
+
+How it works: Omarchy installs plugins as git checkouts and never pulls
+them itself. `omarchy plugin update` fetches the repo, fast-forwards to
+the newest commit, validates the result, and rolls back automatically if
+validation fails. Applying the new UI then needs a brief, intentional
+shell restart — the running shell keeps showing the old compiled UI until
+then — and a few seconds after the restart one toast confirms what's
+running (`v0.1.3 · abc1234`, also shown under the buttons). That toast
+waits for the notification server first, so it never gets lost in the
+restart. Toasts stay hidden while your notification
+silencing is on.
+
+If the daemon source changed, the next shell start re-runs the installer — it downloads the CI prebuilt from
+the versioned `vX.Y.Z` release matching that exact source (content hash) and
+restarts the daemon automatically. There is no source build and no rolling
+release on your machine: between a daemon change and its version tag there
+is no prebuilt, so the panel shows the reason and keeps the current binary
+until the maintainer tags the version (~5-8 min for CI to publish the tag).
+Bundled soundpacks re-sync the same way (changed packs refresh, removed
+packs disappear, your imported packs are never touched) and the panel shows
+a "Soundpacks updated" toast when it happens.
+
+## Remove
+
+```sh
+# purge-only: stops daemon, removes binary + unit + all data + .bak
+~/.config/omarchy/plugins/io.github.sandeshrai00.sorakey/scripts/sora-uninstall.sh
+omarchy plugin remove io.github.sandeshrai00.sorakey --yes
+omarchy restart shell
+```
+
+`sora-uninstall.sh` is **purge-only** — it removes the unit, data, binary,
+`.bak` and caches. There is no purge flag; the panel and manual path do
+the same wipe. The keyboard permission (`/etc/udev/rules.d/70-sora-keyboard.rules`
++ ACL) is **kept** by design (see `docs/keyboard-access.md`); revoke it with
+`sudo ~/.local/lib/sorakey/sora-keyboard-revoke.sh`. The final `omarchy restart shell` drops the bar icon.
+
+> Removed via Omarchy's own menu instead (`plugin → remove`)? Same standard as
+> Uninstall: the daemon notices its checkout is gone the instant it happens
+> (kernel event) and stops itself, wiping all data (no .bak). The keyboard
+> permission is kept by design — reinstall or reboot re-asks nothing. Revoke
+> the permission itself anytime in a terminal with:
+> `sudo ~/.local/lib/sorakey/sora-keyboard-revoke.sh` (see
+> `docs/keyboard-access.md`).
+
+## Import a soundpack
+
+Click the keyboard icon on the bar → **Import Sound** → pick a `.zip`.
+The pack is extracted to `~/.local/share/sorakey/soundpacks/keyboard/{id}/`
+and appears in the keyboard dropdown on the next refresh. The ZIP must
+contain a `config.json` (V2 format).
+
+## Control API
+
+`sorakey ctl '<json>'` speaks one JSON line in, one JSON line out, over
+`$XDG_RUNTIME_DIR/sorakey.sock`:
+
+- `status` — running, muted, volume, per-pack volume, active pack, audio device
+- `mute {"muted": true|false}`
+- `volume {"value": 0-100}` — global level (used when no pack is selected)
+- `per_pack_volume {"id": "keyboard/...", "value": 0-100}`
+- `reset_volume {"id": "keyboard/..."}` — back to the pack's recommended level
+- `keyboard_pack {"id": "keyboard/..."}` — switch the active pack
+- `packs` — list available packs
+- `delete_pack {"id": "keyboard/..."}` — remove a pack (falls back to another)
+- `audio_devices` — list output devices + current selection
+- `select_device {"id": "..."}` — route output there (`null` = system default)
+- `set_bar_section {"section": "left|center|right"}` / `get_bar_section`
+- `export_logs` — recent error log as text, with a suggested filename
+
+## Diagnostics & logs
+
+- **Error logs**: the daemon keeps a rolling buffer of recent errors.
+  Settings → **Export error logs** opens a GTK save dialog. The file is
+  named `sorakey-log-<timestamp>.txt`.
+
+## Files
+
+| Path | What |
+|---|---|
+| `manifest.json` | Omarchy plugin manifest (bar-widget + service) |
+| `SoraWidget.qml` | Bar icon + popup panel (with **Import Sound** button) |
+| `SoraService.qml` | Headless service (daemon lifecycle + import flow) |
+| `SoraKeyStore.js` | Status/pack parsing helpers |
+| `SoraPackPicker.qml` | Searchable soundpack picker |
+| `scripts/sora-install` | One-click installer |
+| `scripts/sora-build.sh` | Prebuilt-only daemon install (content-hash matched) + bundled-pack sync |
+| `scripts/sora-keyboard-access.sh` | One-approval keyboard-access enabler (udev rule) |
+| `scripts/sorakey-detached` | Reload-proof detached helper launcher (import/export dialogs) |
+| `scripts/sora-pack-import.py` | GTK4 file-picker + ZIP extractor |
+| `scripts/sora-export-logs.py` | Log export (dialog or `~/Downloads`) |
+| `scripts/_v1_shared.py` | Shared V1 tables + result-file channel for the pickers |
+| `scripts/sora-uninstall.sh` | Removes daemon, unit file, binary, all data (purge-only) |
+| `udev/70-sora-keyboard.rules` | Keyboard-access udev rule source |
+| `daemon/` | The `sorakey` Rust daemon (trimmed MechvibesDX core) |
+| `daemon/soundpacks/` | Built-in V2 soundpacks |
+
+## Layout
+
+```
+~/.local/bin/sorakey                 binary
+~/.local/share/sorakey/soundpacks/    built-in + imported packs
+~/.local/share/sorakey/data/config.json   settings (persisted by ctl)
+~/.local/share/sorakey/data/bar-section  last bar section chosen in Settings
+$XDG_RUNTIME_DIR/sorakey.sock         control socket
+```
+
+## Build the daemon by hand (developers only)
+
+```sh
+SORAKEY_ALLOW_SOURCE=1 ./scripts/sora-build.sh  # developers only
+# — or directly:
+cargo build --release --manifest-path daemon/Cargo.toml
+```
+
+Requires `rustc` plus the native libs `alsa`, `libevdev`, `libx11`,
+`pkg-config` (already present on an Omarchy box). User machines never do
+this: installs use the CI prebuilt or refuse loudly.
+
+## License
+
+MIT. The daemon is a fork of the MIT-licensed MechvibesDX core
+(Copyright (c) 2026 Hải Nguyễn); see `LICENSE`.

@@ -1,0 +1,4 @@
+daemon/target/
+__pycache__/
+*.pyc
+admin-scripts/
