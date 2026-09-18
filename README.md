@@ -1,5 +1,9 @@
 # Sorakey
 
+Type like you mean it — rich mechanical sounds for your Omarchy.
+
+![Sorakey preview](preview.png)
+
 Mechanical keyboard sounds for the Omarchy Quattro bar — lean Rust daemon + bar widget with live mute, volume and soundpacks.
 
 ## Install
