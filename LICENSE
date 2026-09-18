@@ -1,10 +1,7 @@
 MIT License
 
-Sorakey — keyboard sound daemon + Omarchy plugin
-Copyright (c) 2026 sandesh_rai
-
-The sorakey daemon is a fork of the MechvibesDX (v0.8.2) audio core:
-Copyright (c) 2026 Hải Nguyễn
+Copyright (c) 2026 sandeshrai00
+Copyright (c) 2026 Hai Nguyen — MechvibesDX (v0.8.2) audio core
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -23,3 +20,11 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+Third-Party Notice:
+The `sorakey` daemon includes audio processing derived from MechvibesDX
+v0.8.2 (MIT, Copyright (c) Hai Nguyen — https://github.com/hainguyents13/mechvibes-dx)
+with GUI, tray, telemetry and auto-updater removed and replaced by a
+headless Unix-socket control API and systemd user service.
