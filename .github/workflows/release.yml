@@ -71,10 +71,12 @@ jobs:
           { find daemon -path daemon/target -prune -o \( -name "Cargo.toml" -o -name "Cargo.lock" -o -name "*.rs" \) -print0; printf '%s\0' "rust-toolchain.toml"; } | sort -z | xargs -0 cat | sha256sum | cut -d' ' -f1 > dist/source.sha256
           cat dist/source.sha256
       - name: Attest binary
+        if: github.repository_visibility == 'public'
         uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: "dist/sorakey-${{ matrix.arch }}"
       - name: Attest checksums
+        if: github.repository_visibility == 'public'
         uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
         with:
           subject-path: "dist/SHA256SUMS-${{ matrix.arch }}"
